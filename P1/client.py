@@ -1,50 +1,75 @@
+#!/usr/bin/env python3
 import argparse, socket, ssl
 
+HELLO = 'ex_string HELLO '
+COUNT = 'ex_string COUNT '
+BYE = 'BYE'
+FIND = 'FIND'
+TLS_PORT = 27994
+DEFAULT_PORT = 27993
+
 parser = argparse.ArgumentParser()
-parser.add_argument('-p', '--port', dest='port', action='store', type=int, default=27994, help='Port to start listing for connections') 
-parser.add_argument('-s', '--ssl', dest='ssl', action='store_true', default=False, help='Whether the client should use a TLS encrypted socket.')
+parser.add_argument('-p', '--port', dest='port', action='store', type=int, default=DEFAULT_PORT, help='Port to start listing for connections') 
+parser.add_argument('-s', '--tls', dest='tls', action='store_true', default=False, help='Whether the client should use a TLS encrypted socket.')
 parser.add_argument('hostname', help='Name of the server to connect to') 
 parser.add_argument('id', help='NEU ID of the student') 
 
 
-HELLO = 'ex_string HELLO '
-COUNT = 'ex_string COUNT '
-BYE = 'ex_string BYE '
-FIND = 'FIND'
-
 def send_msg(sock: socket.SocketType, msg):
+    if not msg.endswith('\n'): msg += '\n'
     sock.sendall(msg.encode('ascii'))
 
-def recv_msg(sock: socket.SocketType):
+def __recv_msg(sock: socket.SocketType):
     data = sock.recv(8192)
     return data.decode('ascii')
 
-def main(args):
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    port = args.port
-    host = args.hostname
-    neu_id = args.id
-    sock.connect((host, port))
-    hello_msg = HELLO + neu_id + '\n'
-    send_msg(sock, hello_msg)
+def recv_full_msg(sock: socket.SocketType):
+    msgText = __recv_msg(sock)
+    # Read until new line
+    while msgText.count('\n') == 0:
+        msgText += __recv_msg(sock)
+    return msgText
+
+
+def wrap_socket(tls_encrypt, host, port, timeout=30) -> socket.SocketType:
+    if tls_encrypt:
+        #Create wrapped socket for TLS connection
+        if port == DEFAULT_PORT: port = TLS_PORT
+        context = ssl.create_default_context()
+        sock = socket.create_connection((host, port), timeout=timeout)
+        return context.wrap_socket(sock, server_hostname=host)
+    else:
+        # Create default socket
+        return socket.create_connection((host, port), timeout=timeout)
+
+def run(sock: socket.SocketType):
     while 1:
-        msgText = recv_msg(sock)
-        # Read until new line
-        while msgText.count('\n') == 0:
-            msgText += recv_msg(sock)
-        print(msgText)
+        msgText = recv_full_msg(sock)
         msg = msgText.split()
+        if not msg:
+            print('Invalid message received from server closing connection')
+            return
         if(len(msg) < 2):
-            send_msg(sock, COUNT + "0\n")
+            send_msg(sock, COUNT + "0")
         elif (FIND == msg[1]):
             char = msg[2]
             s_msg = msg[3]
             res = s_msg.count(char)
-            print(res)
-            send_msg(sock, COUNT + str(res) + "\n")
+            send_msg(sock, COUNT + str(res))
         elif (BYE == msg[1]):
             print(msgText)
             return
+
+def main(args):
+    port = args.port
+    tls = args.tls
+    host = args.hostname
+    neu_id = args.id
+    sock = wrap_socket(tls, host, port)
+    hello_msg = HELLO + neu_id
+    send_msg(sock, hello_msg)
+    run(sock)
+    sock.close()
 
 if __name__ == '__main__':
     args = parser.parse_args()
