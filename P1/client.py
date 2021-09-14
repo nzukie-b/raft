@@ -12,15 +12,11 @@ COUNT = 'ex_string COUNT '
 BYE = 'ex_string BYE '
 FIND = 'FIND'
 
-HOST = socket.gethostbyname("proj1.3700.network")
-
 def send_msg(sock: socket.SocketType, msg):
     sock.sendall(msg.encode('ascii'))
 
 def recv_msg(sock: socket.SocketType):
     data = sock.recv(8192)
-    # if not data:
-    #     return data
     return data.decode('ascii')
 
 def main(args):
@@ -33,12 +29,13 @@ def main(args):
     send_msg(sock, hello_msg)
     while 1:
         msgText = recv_msg(sock)
+        # Read until new line
         while msgText.count('\n') == 0:
             msgText += recv_msg(sock)
         print(msgText)
         msg = msgText.split()
         if(len(msg) < 2):
-            send_msg(sock, COUNT + "0" + "\n")
+            send_msg(sock, COUNT + "0\n")
         elif (FIND == msg[1]):
             char = msg[2]
             s_msg = msg[3]
@@ -48,24 +45,6 @@ def main(args):
         elif (BYE == msg[1]):
             print(msgText)
             return
-
-
-    # context = ssl.create_default_context()
-    # with socket.create_connection((args.hostname, args.port)) as sock:
-    #     with context.wrap_socket(sock, server_hostname=args.hostname) as ssock:
-    #         print(ssock.version)
-    #         send_msg(ssock, hello_msg)
-    #         data = recv_msg(ssock)
-    #         print(data)
-    # if args.ssl:
-    #     conn = context.wrap_socket(sock, server_hostname=args.hostname)
-    # else:
-    #     conn = sock.connect((args.hostname, args.port))
-    # print(args.ssl)
-    # send_msg(conn, hello_msg)
-    # res = recv_msg(conn)
-    # print(res)
-
 
 if __name__ == '__main__':
     args = parser.parse_args()
