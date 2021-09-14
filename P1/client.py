@@ -1,0 +1,72 @@
+import argparse, socket, ssl
+
+parser = argparse.ArgumentParser()
+parser.add_argument('-p', '--port', dest='port', action='store', type=int, default=27994, help='Port to start listing for connections') 
+parser.add_argument('-s', '--ssl', dest='ssl', action='store_true', default=False, help='Whether the client should use a TLS encrypted socket.')
+parser.add_argument('hostname', help='Name of the server to connect to') 
+parser.add_argument('id', help='NEU ID of the student') 
+
+
+HELLO = 'ex_string HELLO '
+COUNT = 'ex_string COUNT '
+BYE = 'ex_string BYE '
+FIND = 'FIND'
+
+HOST = socket.gethostbyname("proj1.3700.network")
+
+def send_msg(sock: socket.SocketType, msg):
+    sock.sendall(msg.encode('ascii'))
+
+def recv_msg(sock: socket.SocketType):
+    data = sock.recv(8192)
+    # if not data:
+    #     return data
+    return data.decode('ascii')
+
+def main(args):
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    port = args.port
+    host = args.hostname
+    neu_id = args.id
+    sock.connect((host, port))
+    hello_msg = HELLO + neu_id + '\n'
+    send_msg(sock, hello_msg)
+    while 1:
+        msgText = recv_msg(sock)
+        while msgText.count('\n') == 0:
+            msgText += recv_msg(sock)
+        print(msgText)
+        msg = msgText.split()
+        if(len(msg) < 2):
+            send_msg(sock, COUNT + "0" + "\n")
+        elif (FIND == msg[1]):
+            char = msg[2]
+            s_msg = msg[3]
+            res = s_msg.count(char)
+            print(res)
+            send_msg(sock, COUNT + str(res) + "\n")
+        elif (BYE == msg[1]):
+            print(msgText)
+            return
+
+
+    # context = ssl.create_default_context()
+    # with socket.create_connection((args.hostname, args.port)) as sock:
+    #     with context.wrap_socket(sock, server_hostname=args.hostname) as ssock:
+    #         print(ssock.version)
+    #         send_msg(ssock, hello_msg)
+    #         data = recv_msg(ssock)
+    #         print(data)
+    # if args.ssl:
+    #     conn = context.wrap_socket(sock, server_hostname=args.hostname)
+    # else:
+    #     conn = sock.connect((args.hostname, args.port))
+    # print(args.ssl)
+    # send_msg(conn, hello_msg)
+    # res = recv_msg(conn)
+    # print(res)
+
+
+if __name__ == '__main__':
+    args = parser.parse_args()
+    main(args)
