@@ -17,11 +17,11 @@ parser.add_argument('id', help='NEU ID of the student')
 
 def send_msg(sock: socket.SocketType, msg):
     if not msg.endswith('\n'): msg += '\n'
-    sock.sendall(msg.encode('ascii'))
+    sock.sendall(msg.encode('utf-8'))
 
 def __recv_msg(sock: socket.SocketType):
     data = sock.recv(8192)
-    return data.decode('ascii')
+    return data.decode('utf-8')
 
 def recv_full_msg(sock: socket.SocketType):
     msgText = __recv_msg(sock)
@@ -31,7 +31,7 @@ def recv_full_msg(sock: socket.SocketType):
     return msgText
 
 
-def wrap_socket(tls_encrypt, host, port, timeout=30) -> socket.SocketType:
+def get_socket(tls_encrypt, host, port, timeout=30) -> socket.SocketType:
     if tls_encrypt:
         #Create wrapped socket for TLS connection
         if port == DEFAULT_PORT: port = TLS_PORT
@@ -49,7 +49,7 @@ def run(sock: socket.SocketType):
         if not msg:
             print('Invalid message received from server closing connection')
             return
-        if(len(msg) < 2):
+        if(len(msg) <= 2):
             send_msg(sock, COUNT + "0")
         elif (FIND == msg[1]):
             char = msg[2]
@@ -65,7 +65,7 @@ def main(args):
     tls = args.tls
     host = args.hostname
     neu_id = args.id
-    sock = wrap_socket(tls, host, port)
+    sock = get_socket(tls, host, port)
     hello_msg = HELLO + neu_id
     send_msg(sock, hello_msg)
     run(sock)
