@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-import argparse, socket, ssl
+import argparse, socket, ssl, re
 from enum import Enum
+from typing import Tuple
 
 HOST = 'ftp.3700.network'
 PORT = 21
@@ -26,7 +27,7 @@ RETR = 'RETR'
 QUIT = 'QUIT'
 PASV = 'PASV'
 
-FTP_URL = 'ftps://{}:{}@{}:{}/'.format(USERNAME, PASSWORD, HOST, PORT)
+FTP_URL = 'ftps://{}:{}@{}:{}/'
 
 parser = argparse.ArgumentParser()
 parser.add_argument('operation', dest='operation', action='store', type=str, 
@@ -102,6 +103,27 @@ class Command(Enum):
 
 def run():
     pass
+
+
+def parse_ftp_url(url) -> Tuple:
+    """Parses the ftp url and returns a tuple of the format: (ftps, <user>, <password>, HOST</path/to/file>)
+        
+        Tuples of length 2 don't have user or password fields, length 3 doesn't have password."""
+    temp_url = url.replace('://', ':')
+    res = tuple(re.split('[:@HOST]', temp_url))
+    return res
+
+def parse_data_channel(msg):
+    """Parses the response from the PASV command. Returns a tuple of (ip_address, port_number)"""
+    # TODO: CODE = 200? 
+    #format: 227 Entering Passive Mode (192,168,150,90,195,149)
+    channel_values = [int(a) for a in msg[msg.index('(') + 1: -2].split(',')]
+    ip_addr = '{}.{}.{}.{}'.format(*channel_values)
+    port = (channel_values[4] << 8) + channel_values[5]
+    return (ip_addr, port)
+
+
+
 
 def main(args):
     socket = get_socket(HOST, PORT)
