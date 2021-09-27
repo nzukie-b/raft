@@ -26,7 +26,7 @@ def __recv_msg(sock: socket.SocketType):
 def recv_full_msg(sock: socket.SocketType):
     msgText = __recv_msg(sock)
     # Read until new line
-    while msgText.count('\r\n') == 0:
+    while msgText.count('\n') == 0:
         msgText += __recv_msg(sock)
     return msgText
 
