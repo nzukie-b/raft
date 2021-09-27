@@ -2,37 +2,45 @@
 import argparse, socket, ssl, re
 from enum import Enum
 from typing import Tuple
+from constants import *
 
-HOST = 'ftp.3700.network'
-PORT = 21
-# USERNAME = 'nzukieb'
-# PASSWORD = '0yUNA1Bo6XPG8F3IWhZr'
-USERNAME = 'Anonoymous'
-PASSWORD = ''
+# HOST = 'ftp.3700.network'
+# PORT = 21
+# # USERNAME = 'nzukieb'
+# # PASSWORD = '0yUNA1Bo6XPG8F3IWhZr'
+# USERNAME = 'Anonoymous'
+# PASSWORD = ''
 
-AUTH = 'AUTH', TLS = 'TLS'
-USER = 'USER'
-PASS = 'PASS'
-PBSZ = 'PBSZ'
-PROT = 'PROT'
-TYPE = 'TYPE'
-MODE = 'MODE'
-STRU = 'STRU'
-LIST = 'LIST'
-DEL  = 'DELE'
-MKD = 'MKD'
-RMD = 'RMD'
-STOR = 'STOR'
-RETR = 'RETR'
-QUIT = 'QUIT'
-PASV = 'PASV'
+# AUTH = 'AUTH'
+# TLS = 'TLS'
+# USER = 'USER'
+# PASS = 'PASS'
+# PBSZ = 'PBSZ'
+# PROT = 'PROT'
+# TYPE = 'TYPE'
+# MODE = 'MODE'
+# STRU = 'STRU'
+# LIST = 'LIST'
+# DEL  = 'DELE'
+# MKD = 'MKD'
+# RMD = 'RMD'
+# STOR = 'STOR'
+# RETR = 'RETR'
+# QUIT = 'QUIT'
+# PASV = 'PASV'
+# MOVE = 'mv'
+# LIST = 'ls'
+# DEL = 'rm'
+# RMD = 'rmdir'
+# MKD = 'mkdir'
+# COPY = 'cp'
 
-FTP_URL = 'ftps://{}:{}@{}:{}/'
+# FTP_URL = 'ftps://{}:{}@{}:{}/'
 
 parser = argparse.ArgumentParser()
-parser.add_argument('operation', dest='operation', action='store', type=str, 
+parser.add_argument('operation', action='store', type=str, 
     help='The operation to execute. Valid operations are ls, rm, rmdir, mkdir, cp, and mv') 
-parser.add_argument('params',  dest='params', action='store', nargs='+', 
+parser.add_argument('params', action='store', nargs='+', 
     help='Parameters for the given operation. Will be one or two paths and/or URLs.')
 
 def get_socket(host, port, timeout=30) -> socket.SocketType:
@@ -92,19 +100,6 @@ def send_quit(socket: socket.SocketType):
 def send_pasv(socket: socket.SocketType):
     __send_command(socket, PASV, '')
 
-
-class Command(Enum):
-    MOVE = 'mv'
-    LIST = 'ls'
-    DEL = 'rm'
-    RMD = 'rmdir'
-    MKD = 'mkdir'
-    COPY = 'cp'
-
-def run():
-    pass
-
-
 def parse_ftp_url(url) -> Tuple:
     """Parses the ftp url and returns a tuple of the format: (ftps, <user>, <password>, HOST</path/to/file>)
         
@@ -124,13 +119,35 @@ def parse_data_channel(msg):
 
 
 
+def run_loop():
+    while True:
+        command = input('./c3700ftp ')
+        params = command.split()
+        print(params)
+        op = OPERATIONS_DICT.get(params[0])
+        #TODO: Determine 
+        if op:
+            print(op)
+            break
 
+        
 def main(args):
     socket = get_socket(HOST, PORT)
-    print(recv_full_msg(socket))
     send_auth(socket)
     print(recv_full_msg(socket))
     socket = encrypt_socket(socket)
+    send_username(socket, USERNAME)
+    print(recv_full_msg(socket))
+    set_prot_buffer(socket)
+    print(recv_full_msg(socket))
+
+    run_loop()
+
+    
+if __name__ == '__main__':
+    args = parser.parse_args()
+    print(args)
+    main(args)
 
 
 
