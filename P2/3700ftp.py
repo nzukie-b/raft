@@ -5,7 +5,7 @@ from collections import namedtuple
 from enum import Enum
 from typing import Tuple
 from constants import *
-from ftp_commands import *
+from utilities import *
 
 parser = argparse.ArgumentParser()
 parser.add_argument('operation', action='store', type=str, 
