@@ -1,12 +1,17 @@
 
 ### DEFAULT ARGS ###
-HOST = 'ftp.3700.network'
-PORT = 21
+HOST_URL = 'ftp.3700.network'
+DEFAULT_PORT = 21
 # USERNAME = 'nzukieb'
 # PASSWORD = '0yUNA1Bo6XPG8F3IWhZr'
 USERNAME = 'Anonoymous'
 PASSWORD = ''
 FTP_URL = 'ftps://{}:{}@{}:{}/'
+
+### DICT KEYS ###
+HOST = 'HOST'
+PORT = 'PORT'
+PATHS = 'PATHS'
 
 
 ###  FTP REQUEST COMMANDS ###

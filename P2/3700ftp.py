@@ -1,41 +1,11 @@
 #!/usr/bin/env python3
 import argparse, socket, ssl, re
+from os import name
+from collections import namedtuple
 from enum import Enum
 from typing import Tuple
 from constants import *
-
-# HOST = 'ftp.3700.network'
-# PORT = 21
-# # USERNAME = 'nzukieb'
-# # PASSWORD = '0yUNA1Bo6XPG8F3IWhZr'
-# USERNAME = 'Anonoymous'
-# PASSWORD = ''
-
-# AUTH = 'AUTH'
-# TLS = 'TLS'
-# USER = 'USER'
-# PASS = 'PASS'
-# PBSZ = 'PBSZ'
-# PROT = 'PROT'
-# TYPE = 'TYPE'
-# MODE = 'MODE'
-# STRU = 'STRU'
-# LIST = 'LIST'
-# DEL  = 'DELE'
-# MKD = 'MKD'
-# RMD = 'RMD'
-# STOR = 'STOR'
-# RETR = 'RETR'
-# QUIT = 'QUIT'
-# PASV = 'PASV'
-# MOVE = 'mv'
-# LIST = 'ls'
-# DEL = 'rm'
-# RMD = 'rmdir'
-# MKD = 'mkdir'
-# COPY = 'cp'
-
-# FTP_URL = 'ftps://{}:{}@{}:{}/'
+from ftp_commands import *
 
 parser = argparse.ArgumentParser()
 parser.add_argument('operation', action='store', type=str, 
@@ -47,71 +17,73 @@ def get_socket(host, port, timeout=30) -> socket.SocketType:
     sock = socket.create_connection((host, port), timeout=timeout)
     return sock
 
-def encrypt_socket(socket: socket.SocketType) -> socket.SocketType:
+def encrypt_socket(socket: socket.SocketType, host) -> socket.SocketType:
     context = ssl.create_default_context()
-    wrapped_socket = context.wrap_socket(socket, server_hostname=HOST)
+    wrapped_socket = context.wrap_socket(socket, server_hostname=host)
     return wrapped_socket
 
 def __recv_msg(sock: socket.SocketType):
     data = sock.recv(8192)
-    return data.decode('utf-8')
+    return data
 
 def recv_full_msg(socket: socket.SocketType):
-    msgText = __recv_msg(socket)
+    msgText = __recv_msg(socket).decode('utf-8')
     # Read until new line
     while msgText.count('\r\n') == 0:
         msgText += __recv_msg(socket)
     return msgText
 
-def __send_command(sock: socket.SocketType, command, param=None):
-    msg = '{} {}\r\n'.format(command, param)
-    sock.sendall(msg.encode('utf-8'))
+def parse_ftp_url(url: str) ->  dict:
+    user = USERNAME
+    pword = PASSWORD
+    port = DEFAULT_PORT
+    paths = []
+    if url.startswith('ftps://'):
+        url = re.split('ftps://', url)[1]
+    else:
+        print('Invalid ftps url')
+        return
+    if '@' in url:
+        url_info = re.split('@', url)
+        login_info = url_info[0]
+        if ':' in login_info:
+            login_info = re.split(':', login_info)
+            user = login_info[0]
+            pword = login_info[1]
+        else:
+            user = login_info
+        url = url_info[1]
+    temp = url.split('/', 1)
+    host = temp[0]
+    if ':' in host:
+        host_info = re.split(':', url)
+        host = host_info[0]
+        port = host_info[1]
+    if len(temp) > 1:
+        paths = temp[1].split()
+    else:
+        paths.append('/')
+    print('username: {}, password: {}, host: {}, port: {}, paths: {}'.format(user, pword, host, port, paths))
+    ftp_url_info = {
+        USER : user,
+        PASS: pword,
+        HOST: host,
+        PORT: int(port),
+        PATHS: paths
+    }
+    return ftp_url_info
 
-def send_auth(socket: socket.SocketType):
-    __send_command(socket, AUTH, TLS)
-def send_username(socket: socket.SocketType, username):
-    __send_command(socket, USER, username)
-def send_password(socket: socket.SocketType, password):
-    __send_command(socket, PASS, password)
-def set_prot_buffer(socket: socket.SocketType):
-    __send_command(socket, PBSZ, 0)
-def set_prot_level(socket: socket.SocketType):
-    __send_command(socket, PROT, 'P')
-def set_conn_type(socket: socket.SocketType):
-    __send_command(socket, TYPE, 'I')
-def set_stream_conn(socket: socket.SocketType):
-    __send_command(socket, MODE, 'S')
-def set_file_conn(socket: socket.SocketType):
-    __send_command(socket, STRU, 'F')
-def send_list(socket: socket.SocketType, dir_path):
-    __send_command(socket, LIST, dir_path)
-def send_del(socket: socket.SocketType, file_path):
-    __send_command(socket, DEL, file_path)
-def send_mkd(socket: socket.SocketType, dir_path):
-    __send_command(socket, MKD, dir_path)
-def send_rmd(socket: socket.SocketType, dir_path):
-    __send_command(socket, RMD, dir_path)
-def send_file(socket: socket.SocketType, file_path):
-    __send_command(socket, STOR, file_path)
-def download_file(socket: socket.SocketType, file_path):
-    __send_command(socket, RETR, file_path)
-def send_quit(socket: socket.SocketType):
-    __send_command(socket, QUIT, '')
-def send_pasv(socket: socket.SocketType):
-    __send_command(socket, PASV, '')
+def handle_login(socket: socket.SocketType, username, password):
+    send_username(socket, username)
+    print(recv_full_msg(socket))
+    send_password(socket, password)
+    print(recv_full_msg(socket))
 
-def parse_ftp_url(url) -> Tuple:
-    """Parses the ftp url and returns a tuple of the format: (ftps, <user>, <password>, HOST</path/to/file>)
-        
-        Tuples of length 2 don't have user or password fields, length 3 doesn't have password."""
-    temp_url = url.replace('://', ':')
-    res = tuple(re.split('[:@HOST]', temp_url))
-    return res
 
 def parse_data_channel(msg):
     """Parses the response from the PASV command. Returns a tuple of (ip_address, port_number)"""
     # TODO: CODE = 200? 
-    #format: 227 Entering Passive Mode (192,168,150,90,195,149)
+    #format: 227 Entering Passive Mode (192,168,150,90,195,149).
     channel_values = [int(a) for a in msg[msg.index('(') + 1: -2].split(',')]
     ip_addr = '{}.{}.{}.{}'.format(*channel_values)
     port = (channel_values[4] << 8) + channel_values[5]
@@ -132,16 +104,30 @@ def run_loop():
 
         
 def main(args):
-    socket = get_socket(HOST, PORT)
+    #TODO: Need to parse args firts to get host and port
+    ftp_info = parse_ftp_url(args.params[0])
+    if not ftp_info:
+        return
+    socket = get_socket(ftp_info.get(HOST), ftp_info.get(PORT))
     send_auth(socket)
     print(recv_full_msg(socket))
-    socket = encrypt_socket(socket)
-    send_username(socket, USERNAME)
-    print(recv_full_msg(socket))
+    socket = encrypt_socket(socket, ftp_info.get(HOST))
+    print(args)
+    handle_login(socket, ftp_info[USER], ftp_info[PASS])
     set_prot_buffer(socket)
     print(recv_full_msg(socket))
-
-    run_loop()
+    set_prot_level(socket)
+    print(recv_full_msg(socket))
+    set_conn_type(socket)
+    print(recv_full_msg(socket))
+    set_conn_mode(socket)
+    print(recv_full_msg(socket))
+    set_conn_file(socket)
+    print(recv_full_msg(socket))
+    send_quit(socket)
+    print(recv_full_msg(socket))
+    socket.close()
+    # run_loop()
 
     
 if __name__ == '__main__':
