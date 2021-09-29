@@ -80,6 +80,8 @@ def handle_login(socket: socket.SocketType, username, password):
     print(recv_full_msg(socket))
 
 
+#TODO: Handle server response function i.e. if Code starts with [4|5|6]\d+
+
 def parse_data_channel(msg):
     """Parses the response from the PASV command. Returns a tuple of (ip_address, port_number)"""
     # TODO: CODE = 200? 
@@ -89,23 +91,12 @@ def parse_data_channel(msg):
     port = (channel_values[4] << 8) + channel_values[5]
     return (ip_addr, port)
 
-
-
-def run_loop():
-    while True:
-        command = input('./c3700ftp ')
-        params = command.split()
-        print(params)
-        op = OPERATIONS_DICT.get(params[0])
-        #TODO: Determine 
-        if op:
-            print(op)
-            break
-
         
 def main(args):
     #TODO: Need to parse args firts to get host and port
     ftp_info = parse_ftp_url(args.params[0])
+    operation = OPERATIONS_DICT.get(args.operation)
+    print(operation)
     if not ftp_info:
         return
     socket = get_socket(ftp_info.get(HOST), ftp_info.get(PORT))
@@ -124,10 +115,19 @@ def main(args):
     print(recv_full_msg(socket))
     set_conn_file(socket)
     print(recv_full_msg(socket))
+    if operation == MKDIR:
+        remote_path = ftp_info.get(PATHS)[0]
+        send_mkd(socket, remote_path)
+    elif operation == RMDIR:
+        remote_path = ftp_info.get(PATHS)[0]
+        send_rmd(socket, remote_path)
+    # elif operation == LIST:
+    #     pass
+    print(recv_full_msg(socket))
+
     send_quit(socket)
     print(recv_full_msg(socket))
     socket.close()
-    # run_loop()
 
     
 if __name__ == '__main__':
