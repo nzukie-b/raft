@@ -11,6 +11,8 @@ FTP_URL = 'ftps://{}:{}@{}:{}/'
 ### DICT KEYS ###
 HOST = 'HOST'
 PORT = 'PORT'
+REMOTE = 'REMOTE'
+LOCAL = 'LOCAL'
 PATHS = 'PATHS'
 
 

@@ -33,72 +33,60 @@ def recv_full_msg(socket: socket.SocketType):
         msgText += __recv_data(socket)
     return msgText
 
-# def recv_full_data(socket: socket.SocketType):
-#     msg
-
-def parse_ftp_url(url: str) ->  dict:
+def parse_ftp_url(params: list) ->  dict:
     user = USERNAME
     pword = PASSWORD
     port = DEFAULT_PORT
-    paths = []
-    if url.startswith('ftps://'):
-        url = re.split('ftps://', url)[1]
-    else:
-        print('Invalid ftps url')
-        return
-    if '@' in url:
-        url_info = re.split('@', url)
-        login_info = url_info[0]
-        if ':' in login_info:
-            login_info = re.split(':', login_info)
-            user = login_info[0]
-            pword = login_info[1]
+    remote_path = None
+    local_path = ''
+    for path in params:
+        if path.startswith('ftps://'):
+            is_local = False
+            url = re.split('ftps://', url)[1]
         else:
-            user = login_info
-        url = url_info[1]
-    temp = url.split('/', 1)
-    host = temp[0]
-    if ':' in host:
-        host_info = re.split(':', url)
-        host = host_info[0]
-        port = host_info[1]
-    if len(temp) > 1:
-        paths = temp[1].split()
-    else:
-        paths.append('/')
-    print('username: {}, password: {}, host: {}, port: {}, paths: {}'.format(user, pword, host, port, paths))
+            is_local = True
+        if is_local:
+            local_path = path
+        else:
+            if '@' in url:
+                url_info = re.split('@', url)
+                login_info = url_info[0]
+                if ':' in login_info:
+                    login_info = re.split(':', login_info)
+                    user = login_info[0]
+                    pword = login_info[1]
+                else:
+                    user = login_info
+                url = url_info[1]
+            temp = url.split('/', 1)
+            host = temp[0]
+            if ':' in host:
+                host_info = re.split(':', url)
+                host = host_info[0]
+                port = host_info[1]
+            remote_path = '/'+temp[1] if temp[1] else '/'
+            # TODO: append / to the remote path actually needed?
+    print('username: {}, password: {}, host: {}, port: {}, remote_path: {}, local_path: {}'.format(user, pword, host, port, remote_path, local_path))
     ftp_url_info = {
         USER : user,
         PASS: pword,
         HOST: host,
         PORT: int(port),
-        PATHS: paths
+        REMOTE: remote_path,
+        LOCAL: local_path,
     }
     return ftp_url_info
 
 def handle_login(socket: socket.SocketType, username, password):
     send_username(socket, username)
-    print(recv_full_msg(socket))
+    get_response(socket)
     send_password(socket, password)
-    print(recv_full_msg(socket))
+    get_response(socket)
 
 def get_response(s: socket.SocketType):
     res = recv_full_msg(s)
     print(res)
     return res
-
-def get_data_response(socket, local_path: None):
-    data = None
-    if not local_path:  
-        while True:
-            try:
-                data = __recv_data(socket)
-                print(data.decode('utf-8'))
-            except IOError as err:
-                socket.close()
-                print('Data socket closed')
-                return
-
 
 #TODO: actually make use of this function
 def is_response_error(msg: str):
@@ -116,9 +104,53 @@ def parse_data_channel(msg):
     port = (int(channel_values[4]) << 8) + int(channel_values[5])
     return (ip_addr, port)
 
+# def handle_data_receive(ctrl_channel: socket.SocketType, data_channel: socket.SocketType, ftp_info: dict):
+#     remote_path = ftp_info.get(REMOTE)
+#     local_path = ftp_info.get(LOCAL)
+#     data_socket = get_socket(data_channel_addr)
+#     # STEP 4
+#     res = get_response(socket)
+#     if is_response_error(res):
+#         print('Error opening data channel. CODE: {}'.format(res))
+#         data_socket.close()
+#         return
+#     # STEP 5
+#     data_socket = encrypt_socket(data_socket, ftp_info.get(HOST))
+#     # STEP 6
+#     while True:
+#         data = __recv_data(data_socket)
+#         if not data: break
+#         dir_list = data.decode('utf-8')
+#         print(dir_list)
+#     # STEP 7
+#     data_socket.close()
+#     print('Data socket closed')
+
+#     # if len(paths) >= 2:
+#     #     if paths[0]
+#     if False:
+#         #TODO: Handle data store
+#         pass
+#     else:
+#         # STEP 1
+#         send_pasv(ctrl_channel)
+#         response = get_response(ctrl_channel)
+#         data_channel_addr = parse_data_channel(response)
+#         print(data_channel_addr)
+#         # STEP 2
+#         send_list(socket, remote_path)
+#         # STEP 3
+        
+#         # STEP 8
+#         get_response(socket)
+
+    
         
 def main(args):
-    ftp_info = parse_ftp_url(args.params[0])
+    ftp_info = parse_ftp_url(args.params)
+    remote_to_local = len(args.params) == 2 and args.params[0].startswith('ftps://')
+    remote_path = ftp_info.get(REMOTE)
+    local_path = ftp_info.get(LOCAL)
     operation = OPERATIONS_DICT.get(args.operation)
     print(operation)
     if not ftp_info:
@@ -141,13 +173,10 @@ def main(args):
     get_response(socket)
     print(operation)
     if operation == MKDIR:
-        remote_path = ftp_info.get(PATHS)[0]
         send_mkd(socket, remote_path)
     elif operation == RMDIR:
-        remote_path = ftp_info.get(PATHS)[0]
         send_rmd(socket, remote_path)
     elif operation == LS:
-        remote_path = ftp_info.get(PATHS)[0] if ftp_info.get(PATHS) else '/'
         # STEP 1
         send_pasv(socket)
         response = get_response(socket)
@@ -176,10 +205,77 @@ def main(args):
         print('Data socket closed')
         # STEP 8
         get_response(socket)
-    send_quit(socket)
-    print(recv_full_msg(socket))
-    socket.close()
+    elif operation == CP:
+        if remote_to_local:
+             # STEP 1
+            send_pasv(socket)
+            response = get_response(socket)
+            data_channel_addr = parse_data_channel(response)
+            print(data_channel_addr)
+            # STEP 2
+            send_retr(socket, remote_path)
+            # STEP 3
+            data_socket = get_socket(data_channel_addr)
+            # STEP 4
+            res = get_response(socket)
+            if is_response_error(res):
+                print('Error opening data channel. CODE: {}'.format(res))
+                data_socket.close()
+                return
+            # STEP 5
+            data_socket = encrypt_socket(data_socket, ftp_info.get(HOST))
+            # STEP 6
+            file = open(local_path, 'wb')
+            while True:
+                data = __recv_data(data_socket)
+                file.write(data)
+                if not data: 
+                    file.close()
+                    break
+            # STEP 7
+            data_socket.close()
+            print('Data socket closed')
+            # STEP 8
+            get_response(socket)
+        else:
+             # STEP 1
+            send_pasv(socket)
+            response = get_response(socket)
+            data_channel_addr = parse_data_channel(response)
+            print(data_channel_addr)
+            # STEP 2
+            send_retr(socket, remote_path)
+            # STEP 3
+            data_socket = get_socket(data_channel_addr)
+            # STEP 4
+            res = get_response(socket)
+            if is_response_error(res):
+                print('Error opening data channel. CODE: {}'.format(res))
+                data_socket.close()
+                return
+            # STEP 5
+            data_socket = encrypt_socket(data_socket, ftp_info.get(HOST))
+            # STEP 6
+            file = open(local_path, 'rb')
+            data = file.read(8192)
+            while data:
+                data_socket.sendall(data)
+                data = file.read(8192)
+            # STEP 7
+            file.close()
+            data_socket.shutdown(socket.SHUT_WR)
+            data_socket.unwrap().close()
+            print('Data socket closed')
+            # STEP 8
+            get_response(socket)
 
+    elif operation == DEL:
+        remote_path = ftp_info.get(REMOTE)
+        send_del(socket, remote_path)
+        
+    send_quit(socket)
+    get_response(socket)
+    socket.close()
     
 if __name__ == '__main__':
     args = parser.parse_args()

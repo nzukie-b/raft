@@ -29,7 +29,7 @@ def send_rmd(socket: socket.SocketType, dir_path):
     __send_command(socket, RMD, dir_path)
 def send_file(socket: socket.SocketType, file_path):
     __send_command(socket, STOR, file_path)
-def download_file(socket: socket.SocketType, file_path):
+def send_retr(socket: socket.SocketType, file_path):
     __send_command(socket, RETR, file_path)
 def send_quit(socket: socket.SocketType):
     __send_command(socket, QUIT, '')
