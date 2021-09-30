@@ -1,5 +1,18 @@
-import socket
+import socket, re, os, ssl
 from constants import *
+from typing import BinaryIO
+
+# Socket creation
+def get_socket(address: tuple, timeout=30) -> socket.SocketType:
+    sock = socket.create_connection(address, timeout=timeout)
+    return sock
+def encrypt_socket(socket: socket.SocketType, host) -> socket.SocketType:
+    context = ssl.create_default_context()
+    wrapped_socket = context.wrap_socket(socket, server_hostname=host)
+    return wrapped_socket
+
+
+### Server Commands
 def __send_command(sock: socket.SocketType, command, param=None):
     msg = '{} {}\r\n'.format(command, param)
     sock.sendall(msg.encode('utf-8'))
@@ -35,4 +48,76 @@ def send_quit(socket: socket.SocketType):
     __send_command(socket, QUIT, '')
 def send_pasv(socket: socket.SocketType):
     __send_command(socket, PASV, '')
-# def send_data(socket: socket.SocketType)
+
+def valid_operation(args: tuple) -> bool:
+    op = args.operation
+    return op in OPS
+
+### helpers
+def parse_ftp_paths(params: list) ->  dict:
+    """Parses the paths and returns a dict of <usernaem"""
+    user = USERNAME
+    pword = PASSWORD
+    port = DEFAULT_PORT
+    remote_path = None
+    local_path = None
+
+    for path in params:
+        if path.startswith('ftps://'):
+            is_local = False
+            path = re.split('ftps://', path)[1]
+        else:
+            is_local = True
+
+        if is_local:
+            local_path = os.path.join(os.getcwd(), path)
+        elif '@' in path:
+            url_info = re.split('@', path)
+            login_info = url_info[0]
+            if ':' in login_info:
+                login_info = re.split(':', login_info)
+                user = login_info[0]
+                pword = login_info[1]
+            else:
+                user = login_info
+            url = url_info[1]
+            temp = url.split('/', 1)
+            host = temp[0]
+            if ':' in host:
+                host_info = re.split(':', url)
+                host = host_info[0]
+                port = host_info[1]
+            remote_path = '/'+temp[1] if temp[1] else '/'
+            # TODO: append / to the remote path actually needed?
+    print('username: {}, password: {}, host: {}, port: {}, remote_path: {}, local_path: {}'.format(user, pword, host, port, remote_path, local_path))
+    ftp_url_info = {
+        USER : user,
+        PASS: pword,
+        HOST: host,
+        PORT: int(port),
+        REMOTE: remote_path,
+        LOCAL: local_path,
+    }
+    return ftp_url_info
+
+#TODO: actually make use of this function
+def parse_data_channel(msg):
+    """Parses the response from the PASV command. Returns a tuple of (ip_address, port_number)"""
+    # TODO: CODE = 200? 
+    #format: 227 Entering Passive Mode (192,168,150,90,195,149).
+    channel_values = msg[msg.index('(') + 1: msg.index(')')].split(',')
+    ip_addr = '{}.{}.{}.{}'.format(*channel_values)
+    port = (int(channel_values[4]) << 8) + int(channel_values[5])
+    print(ip_addr, port)
+    return (ip_addr, port)
+
+def get_file(path, params='wb') -> BinaryIO:
+    try:
+        file = open(path, params)
+        return file
+    except OSError as err:
+        print('Error with local file or directory, {}'.format(err))
+
+def is_response_error(msg: str):
+    #Responses starting with 4, 5, 6 are errors.
+    return re.match('[4|5|6]\d+', msg)
