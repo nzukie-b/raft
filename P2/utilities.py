@@ -27,11 +27,12 @@ def send_mkd(socket: socket.SocketType, dir_path):
     __send_command(socket, MKD, dir_path)
 def send_rmd(socket: socket.SocketType, dir_path):
     __send_command(socket, RMD, dir_path)
-def send_file(socket: socket.SocketType, file_path):
+def send_store(socket: socket.SocketType, file_path):
     __send_command(socket, STOR, file_path)
-def send_retr(socket: socket.SocketType, file_path):
+def send_return(socket: socket.SocketType, file_path):
     __send_command(socket, RETR, file_path)
 def send_quit(socket: socket.SocketType):
     __send_command(socket, QUIT, '')
 def send_pasv(socket: socket.SocketType):
     __send_command(socket, PASV, '')
+# def send_data(socket: socket.SocketType)
