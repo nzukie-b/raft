@@ -49,11 +49,17 @@ def send_quit(socket: socket.SocketType):
 def send_pasv(socket: socket.SocketType):
     __send_command(socket, PASV, '')
 
+
+# VALIDATION
 def valid_operation(args: tuple) -> bool:
     op = args.operation
     return op in OPS
+def is_response_error(msg: str):
+    #Responses starting with 4, 5, 6 are errors.
+    return re.match('[4|5|6]\d+', msg)
 
-### helpers
+
+### Parsers
 def parse_ftp_paths(params: list) ->  dict:
     """Parses the paths and returns a dict of <usernaem"""
     user = USERNAME
@@ -100,7 +106,6 @@ def parse_ftp_paths(params: list) ->  dict:
     }
     return ftp_url_info
 
-#TODO: actually make use of this function
 def parse_data_channel(msg):
     """Parses the response from the PASV command. Returns a tuple of (ip_address, port_number)"""
     # TODO: CODE = 200? 
@@ -117,7 +122,4 @@ def get_file(path, params='wb') -> BinaryIO:
         return file
     except OSError as err:
         print('Error with local file or directory, {}'.format(err))
-
-def is_response_error(msg: str):
-    #Responses starting with 4, 5, 6 are errors.
-    return re.match('[4|5|6]\d+', msg)
+        return None

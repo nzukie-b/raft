@@ -59,6 +59,7 @@ def init_data_socket(ctrl_channel: socket.SocketType, ftp_operation: Callable[[s
     res = get_ctrl_response(ctrl_channel)
     if is_response_error(res):
         print('Error opening data channel. CODE: {}'.format(res))
+        print(remote_path)
         data_socket.close()
     else:
     # STEP 5
@@ -77,6 +78,37 @@ def handle_shutdown(socket: socket.SocketType):
     send_quit(socket)
     get_ctrl_response(socket)
     socket.close()
+
+def handle_copy(ctrl_channel:socket.SocketType, local_path: str, remote_path: str, host: str, download: bool) -> bool:
+    ftp_op = send_return if download else send_store
+    data_socket = init_data_socket(ctrl_channel, ftp_op, remote_path, host)
+    if data_socket.fileno() == -1:
+        return False
+    if download:
+        file = get_file(local_path, 'wb')
+        # STEP 6
+        if file is None:
+            return False
+        data = recv_data(data_socket)
+        while data:
+            file.write(data)
+            data = recv_data(data_socket)
+        # STEP 7
+        file.close()
+        close_data_socket(data_socket, download)
+    else:
+        # STEP 6
+        file = get_file(local_path, 'rb')
+        if file is None:
+            return False
+        data = file.read(4096)
+        while data:
+            data_socket.sendall(data)
+            data = file.read(4096)
+        # STEP 7
+        file.close()
+        close_data_socket(data_socket, download)
+    return True
 
 def main(args):
     ftp_info = parse_ftp_paths(args.params)
@@ -107,35 +139,20 @@ def main(args):
         # STEP 7
         close_data_socket(data_socket)
     elif operation == CP:
-        data_socket = init_data_socket(socket, send_return, remote_path, ftp_info.get(HOST))
-        if data_socket.fileno() == -1:
-            handle_shutdown(socket)
-            return
-        if is_download:
-            file = get_file(local_path, 'wb')
-            # STEP 6
-            if file:
-                data = recv_data(data_socket)
-                while data:
-                    file.write(data)
-                    data = recv_data(data_socket)
-            # STEP 7
-                file.close()
-            close_data_socket(data_socket, is_download)
-        else:
-            # STEP 6
-            file = get_file(local_path, 'rb')
-            if file:
-                data = file.read(4096)
-                while data:
-                    data_socket.sendall(data)
-                    data = file.read(4096)
-            # STEP 7
-                file.close()
-            close_data_socket(data_socket, is_download)
+        handle_copy(ctrl_channel=socket, local_path=local_path, remote_path=remote_path, host=ftp_info.get(HOST), download=is_download)
     elif operation == RM:
         remote_path = ftp_info.get(REMOTE)
         send_del(socket, remote_path)
+    elif operation == MV:
+        success = handle_copy(ctrl_channel=socket, local_path=local_path, remote_path=remote_path, host=ftp_info.get(HOST), download=is_download)
+        print(success)
+        if success and is_download:
+            send_del(socket, remote_path)
+        elif success:
+            try:
+                os.remove(local_path)
+            except OSError:
+                print('No local file to remove after mv')
     # STEP 8
     get_ctrl_response(socket)
     handle_shutdown(socket)
