@@ -10,6 +10,9 @@ def encrypt_socket(socket: socket.SocketType, host) -> socket.SocketType:
     context = ssl.create_default_context()
     wrapped_socket = context.wrap_socket(socket, server_hostname=host)
     return wrapped_socket
+def recv_data(sock: socket.SocketType):
+    data = sock.recv(8192)
+    return data
 
 
 ### Server Commands

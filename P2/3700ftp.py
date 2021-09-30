@@ -10,10 +10,6 @@ parser.add_argument('operation', action='store', type=str,
 parser.add_argument('params', action='store', nargs='+', 
     help='Parameters for the given operation. Will be one or two paths and/or URLs.')
 
-def recv_data(sock: socket.SocketType):
-    data = sock.recv(8192)
-    return data
-
 def __recv_full_msg(socket: socket.SocketType):
     msgText = recv_data(socket).decode('utf-8')
     # Read until end of response
@@ -69,7 +65,6 @@ def init_data_socket(ctrl_channel: socket.SocketType, ftp_operation: Callable[[s
 def close_data_socket(data_socket: socket.SocketType, download=True):
     #Step 7, 8
     if not download:
-        print('closing')
         data_socket = data_socket.unwrap()
         data_socket.shutdown(socket.SHUT_WR)
     data_socket.close()
@@ -110,6 +105,20 @@ def handle_copy(ctrl_channel:socket.SocketType, local_path: str, remote_path: st
         close_data_socket(data_socket, download)
     return True
 
+def handle_list(ctrl_channel: socket.SocketType, remote_path:str, host:str):
+    # STEP 1 - 5
+    data_socket = init_data_socket(ctrl_channel, send_list, remote_path, host)
+    if data_socket.fileno() == -1:
+        return
+    # STEP 6
+    while True:
+        data = recv_data(data_socket)
+        if not data: break
+        dir_list = data.decode('utf-8')
+        print(dir_list)
+    # STEP 7
+    close_data_socket(data_socket)
+
 def main(args):
     ftp_info = parse_ftp_paths(args.params)
     is_download = len(args.params) == 2 and args.params[0].startswith('ftps://')
@@ -122,30 +131,22 @@ def main(args):
     # TODO: HANDLE SERVER ERROR RESPONSES
     if operation == MKDIR:
         send_mkd(socket, remote_path)
+    
     elif operation == RMDIR:
         send_rmd(socket, remote_path)
+    
     elif operation == LS:
-        # STEP 1 - 5
-        data_socket = init_data_socket(socket, send_list, remote_path, ftp_info.get(HOST))
-        if data_socket.fileno() == -1:
-            handle_shutdown(socket)
-            return
-        # STEP 6
-        while True:
-            data = recv_data(data_socket)
-            if not data: break
-            dir_list = data.decode('utf-8')
-            print(dir_list)
-        # STEP 7
-        close_data_socket(data_socket)
+        handle_list(ctrl_channel=socket, remote_path=remote_path, host=ftp_info.get(HOST))
+    
     elif operation == CP:
         handle_copy(ctrl_channel=socket, local_path=local_path, remote_path=remote_path, host=ftp_info.get(HOST), download=is_download)
+    
     elif operation == RM:
         remote_path = ftp_info.get(REMOTE)
         send_del(socket, remote_path)
+    
     elif operation == MV:
         success = handle_copy(ctrl_channel=socket, local_path=local_path, remote_path=remote_path, host=ftp_info.get(HOST), download=is_download)
-        print(success)
         if success and is_download:
             send_del(socket, remote_path)
         elif success:
