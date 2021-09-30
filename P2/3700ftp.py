@@ -216,9 +216,10 @@ def main(args):
                 # STEP 7
                 file.close()
             close_data_socket(data_socket, is_download)
-    elif operation == DEL:
+    elif operation == RM:
         remote_path = ftp_info.get(REMOTE)
         send_del(socket, remote_path)
+        get_response(socket)
     # STEP 8
     send_quit(socket)
     get_response(socket)
