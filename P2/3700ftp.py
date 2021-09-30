@@ -141,13 +141,22 @@ def init_data_socket(ctrl_channel: socket.SocketType, ftp_operation: Callable[[s
 
 def close_data_socket(data_socket: socket.SocketType, download=True):
     if not download:
+        print('closing')
+        data_socket = data_socket.unwrap()
         data_socket.shutdown(socket.SHUT_WR)
-    # STEP 7
-    data_socket.unwrap().close()
 
-def get_file(path) -> BinaryIO:
+    # data = __recv_data(data_socket)
+    # while data:
+        # data = __recv_data(data_socket)
+    # STEP 7
+    # data_socket.sendall('\r\n'.encode())
+    # data_socket = encrypt_socket(data_socket,)
+
+    data_socket.close()
+
+def get_file(path, params='wb') -> BinaryIO:
     try:
-        file = open(path, 'wb')
+        file = open(path, params)
         return file
     except OSError as err:
         print('Error with local file or directory, {}'.format(err))
@@ -198,7 +207,7 @@ def main(args):
         else:
             data_socket = init_data_socket(socket, send_store, remote_path, ftp_info.get(HOST))
             # STEP 6
-            file = get_file(local_path)
+            file = get_file(local_path, 'rb')
             if file:
                 data = file.read(4096)
                 while data:
