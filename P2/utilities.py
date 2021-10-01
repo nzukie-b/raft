@@ -1,6 +1,7 @@
 import socket, re, os, ssl
 from constants import *
 from typing import BinaryIO
+from urllib.parse import urlparse
 
 # Socket creation
 def get_socket(address: tuple, timeout=30) -> socket.SocketType:
@@ -64,40 +65,34 @@ def is_response_error(msg: str):
 
 ### Parsers
 def parse_ftp_paths(params: list) ->  dict:
+    # TODO: urllib.parse does this better.
     """Parses the paths and returns a dict of <usernaem"""
-    user = USERNAME
-    pword = PASSWORD
+    user = DEFAULT_USER
+    pword = DEFAULT_PASSWORD
     port = DEFAULT_PORT
     remote_path = None
     local_path = None
-
-    for path in params:
-        if path.startswith('ftps://'):
-            is_local = False
-            path = re.split('ftps://', path)[1]
-        else:
-            is_local = True
-
+    parsed_urls = [urlparse(param) for param in params]
+    for url in parsed_urls:
+        is_local = False if url.scheme == 'ftps' else True
         if is_local:
-            local_path = os.path.join(os.getcwd(), path)
-        elif '@' in path:
-            url_info = re.split('@', path)
+            local_path = os.path.join(os.getcwd(), url.path)
+        elif '@' in url.netloc:
+            url_info = re.split('@', url.netloc)
             login_info = url_info[0]
             if ':' in login_info:
                 login_info = re.split(':', login_info)
-                user = login_info[0]
-                pword = login_info[1]
+                if login_info[0]: user = login_info[0]
+                if login_info[1]: pword = login_info[1]
             else:
                 user = login_info
-            url = url_info[1]
-            temp = url.split('/', 1)
-            host = temp[0]
+            host = url_info[1]
             if ':' in host:
                 host_info = re.split(':', url)
                 host = host_info[0]
                 port = host_info[1]
-            remote_path = '/'+temp[1] if temp[1] else '/'
-            # TODO: append / to the remote path actually needed?
+                
+            remote_path = url.path if url.path else '/'
     print('username: {}, password: {}, host: {}, port: {}, remote_path: {}, local_path: {}'.format(user, pword, host, port, remote_path, local_path))
     ftp_url_info = {
         USER : user,

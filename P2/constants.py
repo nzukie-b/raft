@@ -4,8 +4,8 @@ HOST_URL = 'ftp.3700.network'
 DEFAULT_PORT = 21
 # USERNAME = 'nzukieb'
 # PASSWORD = '0yUNA1Bo6XPG8F3IWhZr'
-USERNAME = 'Anonoymous'
-PASSWORD = ''
+DEFAULT_USER = 'Anonoymous'
+DEFAULT_PASSWORD = ''
 FTP_URL = 'ftps://{}:{}@{}:{}/'
 
 ### DICT KEYS ###

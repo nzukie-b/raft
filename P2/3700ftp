@@ -69,7 +69,9 @@ def close_data_socket(data_socket: socket.SocketType, download=True):
         data_socket.shutdown(socket.SHUT_WR)
     data_socket.close()
         
-def handle_shutdown(socket: socket.SocketType):
+def handle_shutdown(socket: socket.SocketType, operation_success: bool):
+    if operation_success:
+        get_ctrl_response(socket)
     send_quit(socket)
     get_ctrl_response(socket)
     socket.close()
@@ -127,35 +129,30 @@ def main(args):
     operation = OPERATIONS_DICT.get(args.operation)
     socket = get_socket((ftp_info.get(HOST), ftp_info.get(PORT)))
     socket = handle_login(socket, host=ftp_info.get(HOST), username=ftp_info.get(USER), password=ftp_info.get(PASS))
-    
+    operation_success = True
+   
     if operation == MKDIR:
         send_mkd(socket, remote_path)
-    
     elif operation == RMDIR:
         send_rmd(socket, remote_path)
-    
     elif operation == LS:
-        handle_list(ctrl_channel=socket, remote_path=remote_path, host=ftp_info.get(HOST))
-    
+        operation_success = handle_list(ctrl_channel=socket, remote_path=remote_path, host=ftp_info.get(HOST)) 
     elif operation == CP:
-        handle_copy(ctrl_channel=socket, local_path=local_path, remote_path=remote_path, host=ftp_info.get(HOST), download=is_download)
-    
+        operation_success = handle_copy(ctrl_channel=socket, local_path=local_path, remote_path=remote_path, host=ftp_info.get(HOST), download=is_download)
     elif operation == RM:
         remote_path = ftp_info.get(REMOTE)
         send_del(socket, remote_path)
-    
     elif operation == MV:
-        success = handle_copy(ctrl_channel=socket, local_path=local_path, remote_path=remote_path, host=ftp_info.get(HOST), download=is_download)
-        if success and is_download:
+        operation_success = handle_copy(ctrl_channel=socket, local_path=local_path, remote_path=remote_path, host=ftp_info.get(HOST), download=is_download)
+        if operation_success and is_download:
             send_del(socket, remote_path)
-        elif success:
+        elif operation_success:
             try:
                 os.remove(local_path)
             except OSError:
                 print('No local file to remove after mv')
-   
-    get_ctrl_response(socket)
-    handle_shutdown(socket)
+                
+    handle_shutdown(socket, operation_success)
     
 if __name__ == '__main__':
     args = parser.parse_args()
