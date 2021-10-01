@@ -128,7 +128,6 @@ def main(args):
     socket = get_socket((ftp_info.get(HOST), ftp_info.get(PORT)))
     socket = handle_login(socket, host=ftp_info.get(HOST), username=ftp_info.get(USER), password=ftp_info.get(PASS))
     
-    # TODO: HANDLE SERVER ERROR RESPONSES
     if operation == MKDIR:
         send_mkd(socket, remote_path)
     
@@ -154,7 +153,7 @@ def main(args):
                 os.remove(local_path)
             except OSError:
                 print('No local file to remove after mv')
-    # STEP 8
+   
     get_ctrl_response(socket)
     handle_shutdown(socket)
     
@@ -163,5 +162,4 @@ if __name__ == '__main__':
     if not valid_operation(args):
         print('Invalid operation received: {}'.format(args.operation))
         quit()
-    print(args)
     main(args)
