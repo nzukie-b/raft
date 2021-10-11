@@ -89,7 +89,7 @@ class Router:
         return outroutes
 
     def get_origin_routes(self, routes):
-        """ select origin routes: EGP > IGP > UNK """
+        """ select origin routes: IGP > EGP > UNK """
         # TODO
         outroutes = []
         return outroutes
@@ -112,7 +112,7 @@ class Router:
             routes = self.get_self_origin(routes)
             # 3. Shortest ASPath
             routes = self.get_shortest_as_path(routes)
-            # 4. EGP > IGP > UNK
+            # 4. IGP > EGP > UNK
             routes = self.get_origin_routes(routes)
             # 5. Lowest IP Address
             # TODO
