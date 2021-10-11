@@ -147,7 +147,7 @@ class Router:
 
     def handle_packet(self, srcif, packet):
         """	dispatches a packet """
-        # TODO
+        # if srcif['']
         return False
 
     def send_error(self, conn, msg):
@@ -170,6 +170,7 @@ class Router:
                             srcif = sock
                     msg = json.loads(k)
                     print(msg)
+                    print(srcif)
                     if not self.handle_packet(srcif, msg):
                         self.send_error(conn, msg)
                 else:
