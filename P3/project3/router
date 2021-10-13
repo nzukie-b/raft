@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import argparse, socket, time, json, select, struct, math
+import re
 from re import split
 
 #DEBUG = True
@@ -50,12 +51,12 @@ class Router:
     relations = None
     sockets = None
 
-    def __init__(self, networks):
+    def __init__(self, networks, asn):
         self.routes = []
-        # [(srcif, packet), (srcif2, packet2)]
         self.updates = []
         self.relations = {}
         self.sockets = {}
+        self.asn = asn
         for relationship in networks:
             network, relation = relationship.split("-")
             # if DEBUG: 
@@ -74,15 +75,20 @@ class Router:
         """ Lookup all valid routes for an address """
         outroutes = []
         split_addr = [int(val) for val in daddr.split('.')]
+        print(f'DEST: {daddr}\n')
         for route in self.routes:
+            print(f'CHECKING ROUTE: {route}\n')
             netmask = [int(nmsk) for nmsk in route[NMSK].split('.')]
             network = [int(ntwk) for ntwk in route[NTWK].split('.')]
+
             res = True
             for ii in range(len(netmask)):
                 if netmask[ii] == 255:
                     res = res and split_addr[ii] == network[ii]
             if res and split_addr[3] in range(1, 255):
                 outroutes.append(route)
+        print(f'OUTROUTES: {outroutes}\n')
+
         return outroutes
 
     def get_shortest_as_path(self, routes):
@@ -132,7 +138,6 @@ class Router:
         """	Select the best route for a given address	"""
         peer = None
         routes = self.lookup_routes(daddr)
-        print(f'Routes: {routes}')
         # Rules go here
         if routes:
             # 1. Highest Preference
@@ -149,16 +154,31 @@ class Router:
             # routes = self.filter_relationships(srcif, routes)
             peer = routes[0][PEER] if routes else None 
             print(f'Peer: {peer}')
-        return self.sockets[peer] if peer else None
+        return peer
 
     def forward(self, srcif, packet):
         """	Forward a data packet	"""
-        print(f'Forward: {packet}')
-        sock = self.get_route(srcif, packet[DEST])
-        if sock:
-            sock.send(json.dumps(packet).encode())
+        print(f'FORWARD: {packet}\n')
+        peer = self.get_route(srcif, packet[DEST])
+        if peer:
+            # TODO: refactor get_route to return Peer
+            self.__send_packet(packet, peer)
             return True
         # NO ROUTE
+        temp = srcif.split('.')
+        temp[3] = '1'
+        new_src = '.'.join(temp)
+        new_dest = packet[SRCE]
+
+        packet[SRCE] = new_src
+        packet[DEST] = new_dest
+        packet[TYPE] = NRTE
+        packet[MESG] = {}
+        print(f'{packet} NO ROUTE')
+
+        socket = self.sockets[srcif]
+        socket.send(json.dumps(packet).encode())
+        # self.__send_packet(packet, packet[SRCE])
         return False
 
     def coalesce(self):
@@ -171,38 +191,37 @@ class Router:
         # print(packet)
         msg = packet[MESG]
         # print(msg)
+        print(f'UPDATE: {packet}')
         self.updates.append(msg)
         route_entry = {NTWK: msg[NTWK], NMSK: msg[NMSK], PEER: srcif, LPRF: msg[LPRF],
                         APTH: msg[APTH], ORIG: msg[ORIG], SORG: msg[SORG]}
         self.routes.append(route_entry)
-        # self.__send_updates(packet)
+        msg[APTH].append(self.asn)
+        self.__send_updates(srcif, packet)
         return True
 
-    def __send_updates(self, packet):
+    def __send_updates(self, srcif, packet):
         """ Handle forwarding route announcements """
-        networks = self.sockets.keys()
-        print(self.routes)
-        update_customers = self.relations[packet[SRCE]] == PEER or self.relations[packet[SRCE]] == PROV
+        networks = self.relations.keys()
+        update_customers = self.relations[srcif] == PEER or self.relations[srcif] == PROV
         for network in networks:
-            # print(self.relations[network])
-            if network == packet[SRCE]:
+            if network == srcif:
+                # Don't send update to self
                 continue
-            # Peer or Provider source
-            elif update_customers and (self.relations[network] == PEER or self.relations[network] == PROV):
+            if update_customers and (self.relations[network] == PEER or self.relations[network] == PROV):
+                # only update this routers customers
                 continue
+            # Send updates to neighbors
             temp = network.split('.')
             temp[3] = '1'
             new_src = '.'.join(temp)
             new_dest = network
-            print(f'Network: {network}')
-            print(f'In send updates1: {packet}')
+
+            print(f'Update Packet Before: {packet}')
             packet[SRCE] = new_src
             packet[DEST] = new_dest
-            print(f'In send updates2: {packet}')
-            
-            self.__send_packet(packet, network)
-            # sock = self.sockets[network]
-            # sock.send(json.dumps(packet).encode())
+            print(f'Update Packet After: {packet}')
+            self.__send_packet(packet, new_dest)
         return True
 
     def revoke(self, packet):
@@ -212,7 +231,6 @@ class Router:
 
     def dump(self, packet):
         """	handles dump table requests	"""
-        # TODO
         old_src = packet[SRCE]
         packet[SRCE] = packet[DEST]
         packet[DEST] = old_src
@@ -256,8 +274,6 @@ class Router:
                         if self.sockets[sock] == conn:
                             srcif = sock
                     msg = json.loads(k)
-                    # print(msg)
-                    # print(srcif)
                     if not self.handle_packet(srcif, msg):
                         self.send_error(conn, msg)
                 else:
@@ -265,5 +281,5 @@ class Router:
         return
 
 if __name__ == "__main__":
-    router = Router(args.networks)
+    router = Router(args.networks, args.asn)
     router.run()
