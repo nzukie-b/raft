@@ -9,6 +9,7 @@ import struct
 import math
 import sys
 import re
+import struct
 from re import split
 
 # LOG_TO_FILE = True
@@ -96,11 +97,20 @@ class Router:
     def __print_log(self, title,  value):
         if DEBUG:
             print(f'{title.upper()}: {value}')
-            pass
+        pass
 
     def __route_log(self, title, value):
         self.__print_log(title + " route", value)
         pass
+
+#### ip2int and int2ip from https://stackoverflow.com/questions/5619685/ ####
+    def __ip2bin(self, addr):
+        temp = bin(struct.unpack("!I", socket.inet_aton(addr))[0])
+        return temp
+
+    def __int2ip(self, addr):
+        return socket.inet_ntoa(struct.pack("!I", addr))
+############################################################################
 
     def lookup_routes(self, daddr):
         """ Lookup all valid routes for an address """
@@ -108,7 +118,7 @@ class Router:
         split_addr = [int(val) for val in daddr.split('.')]
         print(f'DEST: {daddr}\n')
         for route in self.routes:
-            self.__route_log('checking', route)
+            # self.__route_log('checking', route)
             netmask = [int(nmsk) for nmsk in route[NMSK].split('.')]
             network = [int(ntwk) for ntwk in route[NTWK].split('.')]
             res = True
@@ -135,7 +145,6 @@ class Router:
                    lprf else lprf for route in routes])
         # Routes with highest local pref
         outroutes = [route for route in routes if route[LPRF] == lprf]
-        # print(f'LPRF ROUTES: {outroutes}\n')
         self.__route_log(LPRF, outroutes)
         return outroutes
 
@@ -156,13 +165,12 @@ class Router:
             outroutes = list(filter(lambda route: route[ORIG] == EGP, routes))
         else:
             outroutes = list(filter(lambda route: route[ORIG] == UNK, routes))
-        self.__print_log(ORIG, outroutes)
+        # self.__print_log(ORIG, outroutes)
         return outroutes
 
     def get_lowest_ip(self, routes):
-        lowest_ip = min((socket.inet_aton(route[PEER]) for route in routes))
-        outroutes = [route for route in routes if socket.inet_aton(
-            route[PEER]) == lowest_ip]
+        lowest_ip = min((int(self.__ip2bin(route[PEER]), 2) for route in routes))
+        outroutes = [route for route in routes if int(self.__ip2bin(route[PEER]), 2) == lowest_ip]
         self.__route_log('Lowest IP', outroutes)
         return outroutes
 
@@ -176,12 +184,40 @@ class Router:
             return None
         return routes
 
+    def get_longest_prefix(self, routes, daddr):
+        """Find routes with the longest matching prefix"""
+        outroutes = []
+        longest_match = 0
+        dest = int(self.__ip2bin(daddr), 2)
+        # TODO: Better way to do this
+        for route in routes:
+            self.__route_log('checking prefix', route)
+            route_ntwk = int(self.__ip2bin(route[NTWK]), 2)
+            route_nmsk = int(self.__ip2bin(route[NMSK]), 2)
+            route_prefix = route_ntwk & route_nmsk
+            route_match = dest & route_prefix
+            if route_match > longest_match:
+                longest_match = route_match
+        for route in routes:
+            route_ntwk = int(self.__ip2bin(route[NTWK]), 2)
+            route_nmsk = int(self.__ip2bin(route[NMSK]), 2)
+            route_prefix = route_ntwk & route_nmsk
+            route_match = dest & route_prefix
+            if route_match == longest_match:
+                outroutes.append(route)
+
+        self.__route_log('longest prefix', outroutes)
+        return outroutes
+
+
     def get_route(self, srcif, daddr) -> socket.SocketType:
         """	Select the best route for a given address	"""
         peer = None
         routes = self.lookup_routes(daddr)
         # Rules go here
         if routes:
+            # 0. Longest Prefix Matching
+            routes = self.get_longest_prefix(routes, daddr)
             # 1. Highest Preference
             routes = self.get_highest_preference(routes)
             # 2. Self Origin
@@ -196,18 +232,17 @@ class Router:
             routes = self.filter_relationships(srcif, routes)
             self.__route_log('FINAL', routes)
             peer = routes[0][PEER] if routes else None
-            self.__print_log(PEER, peer)
+            # self.__print_log(PEER, peer)
         return peer
 
     def forward(self, srcif, packet):
         """	Forward a data packet	"""
-        print(f'FORWARD: {packet}\n')
+        self.__print_log('forward', packet)
         dest = packet[DEST]
         peer = self.get_route(srcif, dest)
         if peer:
             self.__send_packet(packet, peer)
             return True
-        # NO ROUTE
         return False
 
     def coalesce(self):
