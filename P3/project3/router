@@ -248,7 +248,54 @@ class Router:
     def coalesce(self):
         """	coalesce any routes that are right next to each other	"""
         # TODO (this is the most difficult task, save until last)
-        return False
+        for r1 in self.routes:
+            r1_ntwk = self.__ip2bin(r1[NTWK])
+            r1_indx = r1_ntwk.rfind('1')
+            for r2 in self.routes:
+                r2_ntwk = self.__ip2bin(r2[NTWK])
+                r2_indx = r2_ntwk.rfind('1')
+                if r1[NMSK] == r2[NMSK]:
+                    nmsk = self.__ip2bin(r1[NMSK])
+                    nmsk_size = nmsk.rfind('1')
+                    is_match = True
+                    indx = 0
+                    smaller_indx = min(r1_indx, r2_indx)
+                    # print(f'small {smaller_indx}')
+                    # print(f'mask_size {mask_size}')
+                    for ii in range(nmsk_size):
+                        is_match = is_match and r1_ntwk[ii] == r2_ntwk[ii]
+                        if not is_match:
+                            indx = ii
+                            break
+                    if indx:
+                        print(f'r1  {r1}, {r1_ntwk}')
+                        print(f'r2  {r2}, {r2_ntwk}')
+                        print(f'indx {indx}')
+                    if r1_indx == r2_indx + 1 and smaller_indx <= nmsk_size:
+                        mask_start = nmsk[:smaller_indx+1]
+                        mask_end = ''.join(['0' for a in range(len(nmsk[smaller_indx+1:]))])
+                        # print(f'len {len(mask_start+mask_end)}')
+                        new_bin_mask = mask_start + mask_end
+                        new_mask = self.__int2ip(int(new_bin_mask, 2))
+                        self.routes.remove(r2)
+                        r1[NMSK] = new_mask
+                        new_size = new_bin_mask.rfind('1')
+                        print(f'new mask {new_bin_mask}, {new_size}')
+                        print(f'old mask {nmsk}, {nmsk_size}')
+                    elif is_match and r1_indx != r2_indx and smaller_indx <= nmsk_size:
+                        mask_start = nmsk[:smaller_indx+1]
+                        mask_end = ''.join(['0' for a in range(len(nmsk[smaller_indx+1:]))])
+                        # print(f'len {len(mask_start+mask_end)}')
+                        new_bin_mask = mask_start + mask_end
+                        new_mask = self.__int2ip(int(new_bin_mask, 2))
+                        to_remove = r2 if int(r1_ntwk, 2) < int(r2_ntwk, 2) else r1
+                        self.routes.remove(to_remove)
+                        to_change = r2 if to_remove == r1 else r1
+                        to_change[NMSK] = new_mask
+                        new_size = new_bin_mask.rfind('1')
+                        print(f'new mask {new_bin_mask}, {new_size}')
+                        print(f'old mask {nmsk}, {nmsk_size}')
+        return True
 
     def update(self, srcif, packet):
         """	handle update packets	"""
@@ -257,6 +304,7 @@ class Router:
         route_entry = {NTWK: msg[NTWK], NMSK: msg[NMSK], PEER: srcif, LPRF: msg[LPRF],
                        APTH: msg[APTH], ORIG: msg[ORIG], SORG: msg[SORG]}
         self.routes.append(route_entry)
+        self.coalesce()
         msg[APTH].append(self.asn)
         self.__send_updates(srcif, packet)
         return True
@@ -299,6 +347,7 @@ class Router:
                     continue
                 new_routes.append(route)
         self.routes = new_routes
+        self.coalesce()
         return self.__send_updates(srcif, packet)
 
     def dump(self, packet):
