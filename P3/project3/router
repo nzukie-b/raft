@@ -10,6 +10,7 @@ import math
 import sys
 import re
 import struct
+import sys
 from re import split
 
 # LOG_TO_FILE = True
@@ -103,12 +104,14 @@ class Router:
         self.__print_log(title + " route", value)
         pass
 
-#### ip2int and int2ip from https://stackoverflow.com/questions/5619685/ ####
+#### ip2bin and int2ip from https://stackoverflow.com/questions/5619685/ ####
     def __ip2bin(self, addr):
+        # socket.inet_aton bytes -> unsigned binary string  
         temp = bin(struct.unpack("!I", socket.inet_aton(addr))[0])
         return temp
 
     def __int2ip(self, addr):
+        # addr unsigned int -> bytes -> ip address string
         return socket.inet_ntoa(struct.pack("!I", addr))
 ############################################################################
 
@@ -188,7 +191,6 @@ class Router:
         outroutes = []
         longest_match = 0
         dest = int(self.__ip2bin(daddr), 2)
-        # TODO: Better way to do this
         for route in routes:
             self.__route_log('checking prefix', route)
             route_ntwk = int(self.__ip2bin(route[NTWK]), 2)
@@ -204,7 +206,6 @@ class Router:
             route_match = dest & route_prefix
             if route_match == longest_match:
                 outroutes.append(route)
-
         self.__route_log('longest prefix', outroutes)
         return outroutes
 
@@ -264,10 +265,6 @@ class Router:
                         if not is_match:
                             indx = ii
                             break
-                    # if indx:
-                    #     print(f'r1  {r1}, {r1_ntwk}')
-                    #     print(f'r2  {r2}, {r2_ntwk}')
-                    #     print(f'indx {indx}')
                     if smaller_indx <= nmsk_size:
                         mask_start = nmsk[:smaller_indx + 1]
                         mask_end = ''.join(
@@ -279,8 +276,6 @@ class Router:
                             self.routes.remove(r2)
                             r1[NMSK] = new_mask
                             new_size = new_bin_mask.rfind('1')
-                            # print(f'new mask {new_bin_mask}, {new_size}')
-                            # print(f'old mask {nmsk}, {nmsk_size}')
                         elif is_match and r1_indx != r2_indx:
                             to_remove = r2 if int(r1_ntwk, 2) < int(r2_ntwk, 2) else r1
                             self.routes.remove(to_remove)
@@ -299,6 +294,7 @@ class Router:
                        APTH: msg[APTH], ORIG: msg[ORIG], SORG: msg[SORG]}
         self.routes.append(route_entry)
         self.coalesce()
+        # Add this router's ASN to the packet
         msg[APTH].append(self.asn)
         self.__send_updates(srcif, packet)
         return True
