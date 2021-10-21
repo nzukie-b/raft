@@ -96,8 +96,8 @@ class Router:
 
     def __print_log(self, title,  value):
         if DEBUG:
-            print(f'{title.upper()}: {value}')
-        pass
+            # print(f'{title.upper()}: {value}')
+            pass
 
     def __route_log(self, title, value):
         self.__print_log(title + " route", value)
@@ -116,7 +116,7 @@ class Router:
         """ Lookup all valid routes for an address """
         outroutes = []
         split_addr = [int(val) for val in daddr.split('.')]
-        print(f'DEST: {daddr}\n')
+        # print(f'DEST: {daddr}\n')
         for route in self.routes:
             # self.__route_log('checking', route)
             netmask = [int(nmsk) for nmsk in route[NMSK].split('.')]
@@ -165,7 +165,6 @@ class Router:
             outroutes = list(filter(lambda route: route[ORIG] == EGP, routes))
         else:
             outroutes = list(filter(lambda route: route[ORIG] == UNK, routes))
-        # self.__print_log(ORIG, outroutes)
         return outroutes
 
     def get_lowest_ip(self, routes):
@@ -209,7 +208,6 @@ class Router:
         self.__route_log('longest prefix', outroutes)
         return outroutes
 
-
     def get_route(self, srcif, daddr) -> socket.SocketType:
         """	Select the best route for a given address	"""
         peer = None
@@ -232,7 +230,6 @@ class Router:
             routes = self.filter_relationships(srcif, routes)
             self.__route_log('FINAL', routes)
             peer = routes[0][PEER] if routes else None
-            # self.__print_log(PEER, peer)
         return peer
 
     def forward(self, srcif, packet):
@@ -254,7 +251,7 @@ class Router:
             for r2 in self.routes:
                 r2_ntwk = self.__ip2bin(r2[NTWK])
                 r2_indx = r2_ntwk.rfind('1')
-                if r1[NMSK] == r2[NMSK]:
+                if r1[NMSK] >= r2[NMSK]:
                     nmsk = self.__ip2bin(r1[NMSK])
                     nmsk_size = nmsk.rfind('1')
                     is_match = True
@@ -267,34 +264,31 @@ class Router:
                         if not is_match:
                             indx = ii
                             break
-                    if indx:
-                        print(f'r1  {r1}, {r1_ntwk}')
-                        print(f'r2  {r2}, {r2_ntwk}')
-                        print(f'indx {indx}')
-                    if r1_indx == r2_indx + 1 and smaller_indx <= nmsk_size:
-                        mask_start = nmsk[:smaller_indx+1]
-                        mask_end = ''.join(['0' for a in range(len(nmsk[smaller_indx+1:]))])
-                        # print(f'len {len(mask_start+mask_end)}')
+                    # if indx:
+                    #     print(f'r1  {r1}, {r1_ntwk}')
+                    #     print(f'r2  {r2}, {r2_ntwk}')
+                    #     print(f'indx {indx}')
+                    if smaller_indx <= nmsk_size:
+                        mask_start = nmsk[:smaller_indx + 1]
+                        mask_end = ''.join(
+                            ['0' for a in range(len(nmsk[smaller_indx + 1:]))])
                         new_bin_mask = mask_start + mask_end
                         new_mask = self.__int2ip(int(new_bin_mask, 2))
-                        self.routes.remove(r2)
-                        r1[NMSK] = new_mask
-                        new_size = new_bin_mask.rfind('1')
-                        print(f'new mask {new_bin_mask}, {new_size}')
-                        print(f'old mask {nmsk}, {nmsk_size}')
-                    elif is_match and r1_indx != r2_indx and smaller_indx <= nmsk_size:
-                        mask_start = nmsk[:smaller_indx+1]
-                        mask_end = ''.join(['0' for a in range(len(nmsk[smaller_indx+1:]))])
-                        # print(f'len {len(mask_start+mask_end)}')
-                        new_bin_mask = mask_start + mask_end
-                        new_mask = self.__int2ip(int(new_bin_mask, 2))
-                        to_remove = r2 if int(r1_ntwk, 2) < int(r2_ntwk, 2) else r1
-                        self.routes.remove(to_remove)
-                        to_change = r2 if to_remove == r1 else r1
-                        to_change[NMSK] = new_mask
-                        new_size = new_bin_mask.rfind('1')
-                        print(f'new mask {new_bin_mask}, {new_size}')
-                        print(f'old mask {nmsk}, {nmsk_size}')
+
+                        if r1_indx == r2_indx + 1:
+                            self.routes.remove(r2)
+                            r1[NMSK] = new_mask
+                            new_size = new_bin_mask.rfind('1')
+                            # print(f'new mask {new_bin_mask}, {new_size}')
+                            # print(f'old mask {nmsk}, {nmsk_size}')
+                        elif is_match and r1_indx != r2_indx:
+                            to_remove = r2 if int(r1_ntwk, 2) < int(r2_ntwk, 2) else r1
+                            self.routes.remove(to_remove)
+                            to_change = r2 if to_remove == r1 else r1
+                            to_change[NMSK] = new_mask
+                            new_size = new_bin_mask.rfind('1')
+                            # print(f'new mask {new_bin_mask}, {new_size}')
+                            # print(f'old mask {nmsk}, {nmsk_size}')
         return True
 
     def update(self, srcif, packet):
@@ -326,10 +320,10 @@ class Router:
             temp[3] = '1'
             new_src = '.'.join(temp)
 
-            print(f'Update Packet Before: {packet}')
+            # print(f'Update Packet Before: {packet}')
             packet[SRCE] = new_src
             packet[DEST] = new_dest
-            print(f'Update Packet After: {packet}\n')
+            # print(f'Update Packet After: {packet}\n')
             self.__send_packet(packet, new_dest)
         return True
 
@@ -390,7 +384,7 @@ class Router:
         packet[DEST] = new_dest
         packet[TYPE] = NRTE
         packet[MESG] = {}
-        print(f'NO ROUTE: {packet}')
+        self.__route_log(NRTE, packet)
         self.__send_packet(packet, srcif)
         return
 
@@ -413,6 +407,7 @@ class Router:
                 else:
                     return
         return
+
 
 if __name__ == "__main__":
     router = Router(args.networks, args.asn)
