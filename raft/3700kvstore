@@ -62,9 +62,13 @@ while True:
 			# if msg['type'] in ['get', 'put']:
 			if msg[TYPE] == GET:
 				print(f"{msg[DST]} received a GET from {msg[SRC]}: {msg}")
-				msg = {}
-				
+				msg = {SRC: MY_ID, DST: msg[SRC], LEADER: 'FFFF', TYPE: FAIL, MID: msg[MID]}
+				send_msg(sock, msg)
 				pass
+			elif msg[TYPE] == PUT:
+				print(f"{msg[DST]} received a PUT from {msg[SRC]}: {msg}")
+				msg = {SRC: MY_ID, DST: msg[SRC], LEADER: 'FFFF', TYPE: FAIL, MID: msg[MID]}
+				send_msg(sock, msg)
 			
 			# Handle noop messages. This may be removed from your final implementation
 			elif msg[TYPE] == 'noop':
