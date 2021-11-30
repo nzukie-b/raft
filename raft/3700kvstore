@@ -13,7 +13,6 @@ REPLICA_IDS = sys.argv[2:]
 # occur over this socket
 sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
 sock.connect(MY_ID)
-LEADER = None
 
 
 
@@ -74,15 +73,15 @@ while True:
 			elif msg[TYPE] == 'noop':
 				print(f"{msg[DST]} received a NOOP from {msg[SRC]}")
 		
-	clock = time.time()
-	if clock-last > 2:
-		# Send a no-op message to a random peer every two seconds, just for fun
-		# You definitely want to remove this from your implementation
-		msg = {'src': MY_ID, 'dst': random.choice(REPLICA_IDS), 'leader': 'FFFF', 'type': 'noop'}
+	# clock = time.time()
+	# if clock-last > 2:
+	# 	# Send a no-op message to a random peer every two seconds, just for fun
+	# 	# You definitely want to remove this from your implementation
+	# 	msg = {'src': MY_ID, 'dst': random.choice(REPLICA_IDS), 'leader': 'FFFF', 'type': 'noop'}
 
-		# Make sure to end all messages with \n
-		sock.send(json.dumps(msg).encode() + b'\n')
+	# 	# Make sure to end all messages with \n
+	# 	sock.send(json.dumps(msg).encode() + b'\n')
 
 
-		print(f"{msg[SRC]} sending a NOOP to {msg[DST]}")
-		last = clock
+	# 	print(f"{msg[SRC]} sending a NOOP to {msg[DST]}")
+	# 	last = clock
