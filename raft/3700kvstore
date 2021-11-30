@@ -1,0 +1,84 @@
+#!/usr/bin/env python3
+
+import sys, socket, select, time, json, random
+from constants import *
+
+# Your ID number
+MY_ID = sys.argv[1]
+
+# The ID numbers of all the other replicas
+REPLICA_IDS = sys.argv[2:]
+
+# Connect to the network. All messages to/from other replicas and clients will
+# occur over this socket
+sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+sock.connect(MY_ID)
+LEADER = None
+
+
+
+LOG = []
+CURRENT_TERM = 0
+COMMIT_INDEX = 0
+LAST_APPLIED = 0
+last = 0
+
+SELECT_WAIT_TIME = 0.01 # 10 milliseconds
+TERMINATOR = b'}\n'
+buffer = b''
+
+def send_msg(sock, mesg):
+	sock.send(json.dumps(msg).encode() + b'\n')
+
+# Receive 
+def recv_msgs(sock):
+	global buffer
+
+	fresh_buf = sock.recv(16384)
+
+	# is this sock shutting down?
+	if len(fresh_buf) == 0:
+			return None
+
+	buffer += fresh_buf	
+
+	msgs = []
+	while TERMINATOR in buffer:
+		position = buffer.find(TERMINATOR) + len(TERMINATOR)
+		msgs.append(json.loads(buffer[:position - 1].decode()))  # -1 to remove the \n, which json.loads won't want
+		buffer = buffer[position:]
+
+	return msgs
+
+while True:
+	ready = select.select([sock], [], [], SELECT_WAIT_TIME)[0]
+	
+	if sock in ready:
+		msgs = recv_msgs(sock)
+
+		for msg in msgs:
+		
+			# For now, ignore get() and put() from clients
+			# if msg['type'] in ['get', 'put']:
+			if msg[TYPE] == GET:
+				print(f"{msg[DST]} received a GET from {msg[SRC]}: {msg}")
+				msg = {}
+				
+				pass
+			
+			# Handle noop messages. This may be removed from your final implementation
+			elif msg[TYPE] == 'noop':
+				print(f"{msg[DST]} received a NOOP from {msg[SRC]}")
+		
+	clock = time.time()
+	if clock-last > 2:
+		# Send a no-op message to a random peer every two seconds, just for fun
+		# You definitely want to remove this from your implementation
+		msg = {'src': MY_ID, 'dst': random.choice(REPLICA_IDS), 'leader': 'FFFF', 'type': 'noop'}
+
+		# Make sure to end all messages with \n
+		sock.send(json.dumps(msg).encode() + b'\n')
+
+
+		print(f"{msg[SRC]} sending a NOOP to {msg[DST]}")
+		last = clock
