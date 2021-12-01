@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-import sys, socket, select, time, json, random
+import sys, socket, select, time, json, random, math
 from constants import *
 
 # Your ID number
@@ -9,13 +9,14 @@ MY_ID = sys.argv[1]
 # The ID numbers of all the other replicas
 REPLICA_IDS = sys.argv[2:]
 
+
 # Connect to the network. All messages to/from other replicas and clients will
 # occur over this socket
 sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
 sock.connect(MY_ID)
+VOTES = set()
 
-
-
+LEAD_ID = 'FFFF'
 LOG = []
 CURRENT_TERM = 0
 COMMIT_INDEX = 0
@@ -28,6 +29,15 @@ buffer = b''
 
 def send_msg(sock, mesg):
 	sock.send(json.dumps(msg).encode() + b'\n')
+
+def format_msg(src, dst, lead_id, mesg_type, mesg_id, key=None, value=None):
+	if key is None:
+		msg = {SRC: src, DST: dst, LEADER: lead_id, TYPE: mesg_type, MID: mesg_id}
+	elif key:
+		msg = {SRC: src, DST: dst, LEADER: lead_id, TYPE: mesg_type, MID: mesg_id, KEY: key}
+	elif value:
+		msg = {SRC: src, DST: dst, LEADER: lead_id, TYPE: mesg_type, MID: mesg_id, KEY: key, VALUE: value}
+	return msg
 
 # Receive 
 def recv_msgs(sock):
@@ -51,28 +61,71 @@ def recv_msgs(sock):
 
 while True:
 	ready = select.select([sock], [], [], SELECT_WAIT_TIME)[0]
-	
 	if sock in ready:
-		msgs = recv_msgs(sock)
+		# Get timeout in miliseconds
+		election_timeout = random.choice(TIMEOUT_RANGE) / 1000
+		sock.settimeout(election_timeout)
+		try:
+			msgs = recv_msgs(sock)
 
-		for msg in msgs:
-		
-			# For now, ignore get() and put() from clients
-			# if msg['type'] in ['get', 'put']:
-			if msg[TYPE] == GET:
-				print(f"{msg[DST]} received a GET from {msg[SRC]}: {msg}")
-				msg = {SRC: MY_ID, DST: msg[SRC], LEADER: 'FFFF', TYPE: FAIL, MID: msg[MID]}
-				send_msg(sock, msg)
-				pass
-			elif msg[TYPE] == PUT:
-				print(f"{msg[DST]} received a PUT from {msg[SRC]}: {msg}")
-				msg = {SRC: MY_ID, DST: msg[SRC], LEADER: 'FFFF', TYPE: FAIL, MID: msg[MID]}
+			for msg in msgs:
+			
+				# For now, ignore get() and put() from clients
+				# if msg['type'] in ['get', 'put']:
+				if msg[TYPE] == GET:
+					print(f"{msg[DST]} received a GET from {msg[SRC]}: {msg}")
+					response = format_msg(MY_ID, msg[SRC], LEAD_ID, FAIL, msg[MID])
+					send_msg(sock, response)
+					pass
+				elif msg[TYPE] == PUT:
+					print(f"{msg[DST]} received a PUT from {msg[SRC]}: {msg}")
+					response = format_msg(MY_ID, msg[SRC], LEAD_ID, FAIL, msg[MID])
+					send_msg(sock, response)
+				
+				# Handle noop messages. This may be removed from your final implementation
+				elif msg[TYPE] == 'noop':
+					print(f"{msg[DST]} received a NOOP from {msg[SRC]}")
+					LEAD_ID = msg[LEADER]
+				elif msg[TYPE] == ELECT:
+					print(f"{msg[DST]} received ELECT from {msg[SRC]}")
+					if MY_ID not in VOTES:
+						VOTES.add(MY_ID)
+						response = format_msg(MY_ID, msg[SRC], LEAD_ID, ELECT, msg[MID])
+						send_msg(sock, response)
+					else:
+						# Already voted during this term
+						pass
+
+
+
+
+		except TimeoutError:
+			# Begin Leader election
+			LEAD_ID = 'FFFF'
+			CURRENT_TERM += 1
+			# Candidate state here?
+			
+			# It then votes for itself and issues RequestVote RPCs in parallel
+			VOTES.clear()
+			VOTES.add(MY_ID)
+			msg_id = ''.join(random.choices(string.ascii_letters + string.digits, k=12))
+			candidate_msgs = [format_msg(MY_ID, replica_id, LEAD_ID, ELECT, msg_id) for replica_id in REPLICA_IDS]
+			for msg in candidate_msgs:
 				send_msg(sock, msg)
 			
-			# Handle noop messages. This may be removed from your final implementation
-			elif msg[TYPE] == 'noop':
-				print(f"{msg[DST]} received a NOOP from {msg[SRC]}")
-		
+			# A candidate continues in this state until one of three things happens: 
+			while True:
+				msg = recv_msgs(sock)
+				if msg[TYPE] == ELECT and msg[MID] == msg_id:
+					VOTES.add(msg[SRC])
+				if len(VOTES) >= math.ceil((REPLICA_IDS + 1 ) / 2) + 1:
+					LEAD_ID = MY_ID
+					msgs = [format_msg(MY_ID, replica_id, LEAD_ID, NOOP, msg_id)]
+					for msg in msgs:
+						send_msg(sock, msg)
+					break
+
+
 	# clock = time.time()
 	# if clock-last > 2:
 	# 	# Send a no-op message to a random peer every two seconds, just for fun
