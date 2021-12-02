@@ -1,230 +1,69 @@
 #!/usr/bin/env python3
 
-import sys, socket, select, time, json, random, math, string
-from constants import *
-from decimal import *
-import utils
+import sys, socket, select, time, json, random
 
 # Your ID number
-MY_ID = sys.argv[1]
+my_id = sys.argv[1]
 
 # The ID numbers of all the other replicas
-REPLICA_IDS = sys.argv[2:]
-
+replica_ids = sys.argv[2:]
 
 # Connect to the network. All messages to/from other replicas and clients will
 # occur over this socket
 sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-sock.connect(MY_ID)
-CURRENT_TERM = 0
-VOTED_FOR = None
-LOG = dict()
+sock.connect(my_id)
 
-sys.stdout = open('log.txt', 'w')
-
-LEAD_ID = 'FFFF'
-COMMIT_INDEX = 0
-LAST_APPLIED = 0
-LAST_CONTACT = None
+last = 0
 
 SELECT_WAIT_TIME = 0.01 # 10 milliseconds
 TERMINATOR = b'}\n'
 buffer = b''
 
-def send_msg(sock, msg):
-	print(f'SENDING: {msg}')
-	sock.send(json.dumps(msg).encode() + b'\n')
-
-def format_msg(src, dst, lead_id, msg_type, msg_id, key=None, value=None, candidate_id = None, vote_granted = None):
-	if msg_type == ELECT:
-		# TODO: something with last_log indx and term since they are included in raft dod
-		msg = {SRC: src, DST: dst, LEADER: lead_id, TYPE: ELECT, TERM: CURRENT_TERM, C_ID: candidate_id, LAST_LOG_INDX: None, LAST_LOG_TERM: None}
-	elif msg_type == ELECT and vote_granted is not None:
-		msg = {SRC: src, DST: dst, LEADER: lead_id, TYPE: ELECT, TERM: CURRENT_TERM, C_ID: candidate_id, LAST_LOG_INDX: None, LAST_LOG_TERM: None, VOTE_GRANTED: vote_granted}
-	elif key is None:
-		msg = {SRC: src, DST: dst, LEADER: lead_id, TYPE: msg_type, MID: msg_id}
-	elif key:
-		msg = {SRC: src, DST: dst, LEADER: lead_id, TYPE: msg_type, MID: msg_id, KEY: key}
-	elif value:
-		msg = {SRC: src, DST: dst, LEADER: lead_id, TYPE: msg_type, MID: msg_id, VALUE: value}
-	return msg
-
 # Receive 
 def recv_msgs(sock):
 	global buffer
+
 	fresh_buf = sock.recv(16384)
+
 	# is this sock shutting down?
 	if len(fresh_buf) == 0:
 			return None
+
 	buffer += fresh_buf	
+
 	msgs = []
 	while TERMINATOR in buffer:
 		position = buffer.find(TERMINATOR) + len(TERMINATOR)
 		msgs.append(json.loads(buffer[:position - 1].decode()))  # -1 to remove the \n, which json.loads won't want
 		buffer = buffer[position:]
+
 	return msgs
 
-def set_election_timeout(sock):
-	election_timeout = random.choice(TIMEOUT_RANGE) / 1000
-	sock.settimeout(election_timeout)
-
-def __handle_get(msg):
-	print(f"{msg[DST]} received a GET from {msg[SRC]}: {msg}")
-	# If the client sends any message to a replica that is not the leader, it should respond with a redirect:
-	if LEAD_ID != MY_ID:
-		response = format_msg(MY_ID, msg[SRC], LEAD_ID, REDIRECT, msg[MID])
-	elif LEAD_ID != 'FFFF':
-		val = LOG.get(msg[KEY])
-		if val:
-			response = format_msg(MY_ID, msg[DST], LEAD_ID, OK, msg[MID], value=val)
-		else:
-			response = format_msg(MY_ID, msg[DST], LEAD_ID, FAIL, msg[MID])
-	else:
-		response = format_msg(MY_ID, msg[SRC], LEAD_ID, FAIL, msg[MID])
-	send_msg(sock, response)
-
-
-def __handle_put(msg):
-	global LOG
-	print(f"{msg[DST]} received a PUT from {msg[SRC]}: {msg}")
-	if LEAD_ID != MY_ID:
-		response = format_msg(MY_ID, msg[SRC], LEAD_ID, REDIRECT, msg[MID])
-	elif LEAD_ID != 'FFFF':
-		LOG[msg[KEY]] = msg[VALUE]
-		response = format_msg(MY_ID, msg[SRC], LEAD_ID, OK, msg[MID])
-	else:
-		response = format_msg(MY_ID, msg[SRC], LEAD_ID, FAIL, msg[MID])
-	send_msg(sock, response)	
-		
-
-def handle_msg(msg):
-	global LAST_CONTACT
-	if msg[LEADER] != 'FFFF':
-		LAST_CONTACT = time.time()
-		if msg[TYPE] == GET:
-			__handle_get(msg)
-		elif msg[TYPE] == PUT:
-			__handle_put(msg)
-		# Handle noop messages. This may be removed from your final implementation
-		elif msg[TYPE] == NOOP:
-			print(f"{msg[DST]} received a NOOP from {msg[SRC]}")
-			LEAD_ID = msg[LEADER]
-			pass
-			# response = format_msg(MY_ID, msg[SRC], LEAD_ID, NOOP, msg[MID])
-			# print(f'replying NOOP')
-			# send_msg(sock, response)
-		elif msg[TYPE] == ELECT:
-			vote_granted = False
-			print(f"{msg[DST]} received ELECT from {msg[SRC]}")
-			# Hasn't voted and voting term is not lower than current term
-			if not VOTED_FOR and msg[TERM] >= CURRENT_TERM:
-				VOTED_FOR = msg[C_ID]
-				vote_granted = True
-			response = format_msg(MY_ID, msg[SRC], LEAD_ID, ELECT, msg[MID], vote_granted=vote_granted)
-			send_msg(sock, response)
-		else:
-			print(f'{MY_ID} OTHER MSG RECV: {msg}')
+while True:
+	ready = select.select([sock], [], [], SELECT_WAIT_TIME)[0]
 	
-def update_term():
-	"""Increments the current term. Clears voting record"""
-	global CURRENT_TERM, VOTED_FOR
-	VOTED_FOR = None
-	CURRENT_TERM += 1
+	if sock in ready:
+		msgs = recv_msgs(sock)
+
+		for msg in msgs:
+		
+			# For now, ignore get() and put() from clients
+			if msg['type'] in ['get', 'put']:
+				pass
+			
+			# Handle noop messages. This may be removed from your final implementation
+			elif msg['type'] == 'noop':
+				print(f"{msg['dst']} received a NOOP from {msg['src']}")
+		
+	clock = time.time()
+	if clock-last > 2:
+		# Send a no-op message to a random peer every two seconds, just for fun
+		# You definitely want to remove this from your implementation
+		msg = {'src': my_id, 'dst': random.choice(replica_ids), 'leader': 'FFFF', 'type': 'noop'}
+
+		# Make sure to end all messages with \n
+		sock.send(json.dumps(msg).encode() + b'\n')
 
 
-
-def begin_election():
-	global LEAD_ID, VOTED_FOR, CURRENT_TERM, LAST_CONTACT
-	# Begin Leader election
-	LEAD_ID = 'FFFF'
-	# Candidate state?
-	update_term()
-	print(f'STARTING LEADER ELECTION TERM: {CURRENT_TERM} {MY_ID}')
-	# It then votes for itself and issues RequestVote RPCs in parallel
-	VOTED_FOR = MY_ID
-	msg_ids = [''.join(random.choices(string.ascii_letters + string.digits, k=12)) for ii in range(len(REPLICA_IDS))]
-	print(msg_ids)
-	candidate_msgs = [format_msg(MY_ID, replica_id, LEAD_ID, ELECT, msg_id, candidate_id=MY_ID) for replica_id, msg_id in zip(REPLICA_IDS, msg_ids)]
-	for msg in candidate_msgs:
-		send_msg(sock, msg)
-	LAST_CONTACT = time.time()
-	election_timeout = random.choice(TIMEOUT_RANGE) / 1000
-	# A candidate continues in this state until one of three things happens: 
-	votes = {MY_ID}
-	while True:
-		try:
-			msgs = recv_msgs(sock)
-			for msg in msgs:
-				# NOTE: Need return to exit while loop here
-				print(f'recved: {msg}')
-				contact = time.time()
-				# (a) It wins the election
-				if msg[TYPE] == ELECT:
-					if msg[VOTE_GRANTED] == True:
-						votes.add(msg[SRC])
-				if len(votes) >= math.ceil((len(REPLICA_IDS) + 1 ) / 2) + 1:
-					print(f'ELECTION WON BY {MY_ID}, VOTES BY {votes}')
-					LEAD_ID = MY_ID
-					# Notify others
-					msg_ids = [''.join(random.choices(string.ascii_letters + string.digits, k=12)) for ii in range(len(REPLICA_IDS))]
-					msgs = [format_msg(MY_ID, replica_id, LEAD_ID, NOOP, msg_id, key=CURRENT_TERM) for replica_id, msg_id in zip(REPLICA_IDS, msg_ids)]
-					print(f'Claiming Leadership for {MY_ID}')
-					for msg in msgs:
-						send_msg(sock, msg)
-					return
-
-				# (b) Another server establishes itself as leader
-				if msg[LEADER] != 'FFFF':
-					# If Leader's term is at least as large as the candidate's current term, the leader is recognized else ignore claim
-					# TODO: include current term in all other mesgs?
-					# if msg[KEY] >= CURRENT_TERM:
-					# 	LEAD_ID = msg[LEADER]
-
-					return
-					# continue
-				# (c) a period of time goes by with no winner
-				total_time = round(Decimal(contact) - Decimal(LAST_CONTACT), 3)
-				print(f'Time taken: {total_time}')
-				if total_time >= election_timeout:
-					raise TimeoutError
-
-		except TimeoutError:
-			print(f'{MY_ID} ELECTION TIMEOUT NO LEADER, {election_timeout}')
-			# Something else?
-			return
-
-
-def main():
-	global LAST_CONTACT
-	LAST_CONTACT = time.time()
-	while True:
-		# Can't do socket.setTimeout() here
-		ready = select.select([sock], [], [], SELECT_WAIT_TIME)[0]
-		# Get timeout in miliseconds
-		election_timeout = random.choice(TIMEOUT_RANGE) / 1000
-		if sock in ready:
-			# TODO: This blocks the socket preventing gets and puts to replicas
-			# Leaders send periodic hearbeats to all followers to maintain their authority
-			# if LEAD_ID == MY_ID:
-			# 	msg_ids = [''.join(random.choices(string.ascii_letters + string.digits, k=12)) for ii in range(len(REPLICA_IDS))]
-			# 	msgs = [format_msg(MY_ID, replica_id, LEAD_ID, NOOP, msg_id, key=CURRENT_TERM) for replica_id, msg_id in zip(REPLICA_IDS, msg_ids)]
-			# 	for msg in msgs:
-			# 		send_msg(sock, msg)
-			try:
-				msgs = recv_msgs(sock)
-				contact = time.time()
-				total_time = round(Decimal(contact) - Decimal(LAST_CONTACT), 3)
-				print(f'Time taken: {total_time}')
-				if total_time >= election_timeout:
-					raise TimeoutError
-				for msg in msgs:
-					handle_msg(msg)
-				
-
-			except TimeoutError:
-				# If a follower receives no communication begin election for new leader
-				begin_election()
-				LAST_CONTACT = time.time()
-			continue
-
-main()
+		print(f"{msg['src']} sending a NOOP to {msg['dst']}")
+		last = clock
