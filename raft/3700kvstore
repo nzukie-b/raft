@@ -14,7 +14,7 @@ REPLICA_IDS = sys.argv[2:]
 # occur over this socket
 sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
 sock.connect(MY_ID)
-sys.stdout = open('log.txt', 'w')
+# sys.stdout = open('log.txt', 'w')
 
 
 last = 0
@@ -28,6 +28,7 @@ LOG = []
 LEADER_ID = 'FFFF'
 COMMIT_INDEX = 0
 LAST_APPLIED = 0
+# TODO: Replace default FFFF with None
 
 
 def format_msg(src, dst, leader, msg_type, m_id, key=None, value=None, candidate_id=None, vote_granted=None, entries=None, leader_indx=None):
@@ -106,7 +107,7 @@ def handle_put(sock, msg):
 	send_msg(sock, response)
 
 def handle_elect(sock, msg):
-	global VOTED_FOR, LEADER_ID
+	global VOTED_FOR, LEADER_ID, CURRENT_TERM
 	print(f"{msg[DST]} received a {msg[TYPE]} from {msg[SRC]}: {msg}")
 	vote_granted = False
 	print(VOTED_FOR)
@@ -114,8 +115,10 @@ def handle_elect(sock, msg):
 		vote_granted = True
 		VOTED_FOR = msg[C_ID]
 		LEADER_ID = msg[C_ID]
+		CURRENT_TERM = msg[TERM]
 	response = format_msg(msg[DST], msg[SRC], LEADER_ID, ELECT, msg[MID], candidate_id=msg[C_ID], vote_granted=vote_granted)
-	send_msg(sock, response)	
+	send_msg(sock, response)
+	return vote_granted	
 
 
 def update_term():
@@ -139,17 +142,19 @@ def begin_election(clock):
 		send_msg(sock, msg)
 	last = clock
 	# A candidate continues in this state until one of three things happens: 
+	all_servers = len(REPLICA_IDS) + 1
 	while True:
 		ready = select.select([sock], [], [], SELECT_WAIT_TIME)[0]
 		if sock in ready:
 			election_msgs = recv_msgs(sock)
 			for msg in election_msgs:
 				print(f'CANDIDATE {MY_ID} RECEIVED {msg}')
-				if msg[TYPE] == ELECT and msg[VOTE_GRANTED]:
+				if msg[TYPE] == ELECT and msg[VOTE_GRANTED] == True:
 					votes.add(msg[SRC])
 					print(f'Adding {msg[SRC]} to candidate votes {votes}')
 				# (a) It wins the election
-				if len(votes) >= math.floor(len(REPLICA_IDS) + 1 / 2) + 1:
+				
+				if len(votes) >= all_servers // 2 + 1:
 					print(f'ELECTION WON BY {MY_ID} with votes {votes}')
 					LEADER_ID = MY_ID
 					msg_ids = [''.join(random.choices(string.ascii_letters + string.digits, k=12)) for ii in range(len(REPLICA_IDS))]
@@ -177,20 +182,23 @@ while True:
 	
 	if sock in ready:
 		msgs = recv_msgs(sock)
+		contact = False
 		for msg in msgs:
 			if msg[TYPE] == GET:
 				handle_get(sock, msg)
 			elif msg[TYPE] == PUT:
 				handle_put(sock, msg)
 			elif msg[TYPE] == ELECT:
-				handle_elect(sock, msg)
+				contact = handle_elect(sock, msg)
+
 				# last = time.time()
 			# Handle noop messages. This may be removed from your final implementation
 			elif msg['type'] == 'noop':
 				print(f"{msg['dst']} received a NOOP from {msg['src']}")
 			# if msg[LEADER] != 'FFFF' or msg[TYPE] == ELECT:
 				# last = time.time()
-				
+		if contact: 
+			continue
 
 	# TODO: Where to update time to avoid a having replicas timeout during election???
 	clock = time.time()
