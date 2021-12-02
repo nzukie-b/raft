@@ -16,17 +16,16 @@ REPLICA_IDS = sys.argv[2:]
 # occur over this socket
 sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
 sock.connect(MY_ID)
-VOTES = set()
+CURRENT_TERM = 0
+VOTED_FOR = None
+LOG = dict()
 
 sys.stdout = open('log.txt', 'w')
 
 LEAD_ID = 'FFFF'
-LOG = dict()
-CURRENT_TERM = 0
 COMMIT_INDEX = 0
 LAST_APPLIED = 0
 LAST_CONTACT = None
-last = 0
 
 SELECT_WAIT_TIME = 0.01 # 10 milliseconds
 TERMINATOR = b'}\n'
@@ -36,8 +35,13 @@ def send_msg(sock, msg):
 	print(f'SENDING: {msg}')
 	sock.send(json.dumps(msg).encode() + b'\n')
 
-def format_msg(src, dst, lead_id, msg_type, msg_id, key=None, value=None):
-	if key is None:
+def format_msg(src, dst, lead_id, msg_type, msg_id, key=None, value=None, candidate_id = None, vote_granted = None):
+	if msg_type == ELECT:
+		# TODO: something with last_log indx and term since they are included in raft dod
+		msg = {SRC: src, DST: dst, LEADER: lead_id, TYPE: ELECT, TERM: CURRENT_TERM, C_ID: candidate_id, LAST_LOG_INDX: None, LAST_LOG_TERM: None}
+	elif msg_type == ELECT and vote_granted is not None:
+		msg = {SRC: src, DST: dst, LEADER: lead_id, TYPE: ELECT, TERM: CURRENT_TERM, C_ID: candidate_id, LAST_LOG_INDX: None, LAST_LOG_TERM: None, VOTE_GRANTED: vote_granted}
+	elif key is None:
 		msg = {SRC: src, DST: dst, LEADER: lead_id, TYPE: msg_type, MID: msg_id}
 	elif key:
 		msg = {SRC: src, DST: dst, LEADER: lead_id, TYPE: msg_type, MID: msg_id, KEY: key}
@@ -75,7 +79,6 @@ def __handle_get(msg):
 			response = format_msg(MY_ID, msg[DST], LEAD_ID, OK, msg[MID], value=val)
 		else:
 			response = format_msg(MY_ID, msg[DST], LEAD_ID, FAIL, msg[MID])
-	
 	else:
 		response = format_msg(MY_ID, msg[SRC], LEAD_ID, FAIL, msg[MID])
 	send_msg(sock, response)
@@ -111,42 +114,43 @@ def handle_msg(msg):
 			# print(f'replying NOOP')
 			# send_msg(sock, response)
 		elif msg[TYPE] == ELECT:
+			vote_granted = False
 			print(f"{msg[DST]} received ELECT from {msg[SRC]}")
-			if MY_ID not in VOTES:
-				VOTES.add(MY_ID)
-				response = format_msg(MY_ID, msg[SRC], LEAD_ID, ELECT, msg[MID], key=CURRENT_TERM)
-				send_msg(sock, response)
-			else:
-				# Already voted during this term
-				pass
+			# Hasn't voted and voting term is not lower than current term
+			if not VOTED_FOR and msg[TERM] >= CURRENT_TERM:
+				VOTED_FOR = msg[C_ID]
+				vote_granted = True
+			response = format_msg(MY_ID, msg[SRC], LEAD_ID, ELECT, msg[MID], vote_granted=vote_granted)
+			send_msg(sock, response)
 		else:
 			print(f'{MY_ID} OTHER MSG RECV: {msg}')
 	
 def update_term():
 	"""Increments the current term. Clears voting record"""
-	global CURRENT_TERM, VOTES
-	VOTES.clear()
+	global CURRENT_TERM, VOTED_FOR
+	VOTED_FOR = None
 	CURRENT_TERM += 1
 
 
 
 def begin_election():
-	global LEAD_ID, VOTES, CURRENT_TERM, LAST_CONTACT
+	global LEAD_ID, VOTED_FOR, CURRENT_TERM, LAST_CONTACT
 	# Begin Leader election
 	LEAD_ID = 'FFFF'
 	# Candidate state?
 	update_term()
 	print(f'STARTING LEADER ELECTION TERM: {CURRENT_TERM} {MY_ID}')
 	# It then votes for itself and issues RequestVote RPCs in parallel
-	VOTES.add(MY_ID)
+	VOTED_FOR = MY_ID
 	msg_ids = [''.join(random.choices(string.ascii_letters + string.digits, k=12)) for ii in range(len(REPLICA_IDS))]
 	print(msg_ids)
-	candidate_msgs = [format_msg(MY_ID, replica_id, LEAD_ID, ELECT, msg_id, key=CURRENT_TERM) for replica_id, msg_id in zip(REPLICA_IDS, msg_ids)]
+	candidate_msgs = [format_msg(MY_ID, replica_id, LEAD_ID, ELECT, msg_id, candidate_id=MY_ID) for replica_id, msg_id in zip(REPLICA_IDS, msg_ids)]
 	for msg in candidate_msgs:
 		send_msg(sock, msg)
 	LAST_CONTACT = time.time()
 	election_timeout = random.choice(TIMEOUT_RANGE) / 1000
 	# A candidate continues in this state until one of three things happens: 
+	votes = {MY_ID}
 	while True:
 		try:
 			msgs = recv_msgs(sock)
@@ -155,10 +159,11 @@ def begin_election():
 				print(f'recved: {msg}')
 				contact = time.time()
 				# (a) It wins the election
-				if msg[TYPE] == ELECT and msg[KEY] == CURRENT_TERM:
-					VOTES.add(msg[SRC])
-				if len(VOTES) >= math.ceil((len(REPLICA_IDS) + 1 ) / 2) + 1:
-					print(f'ELECTION WON BY {MY_ID}, {VOTES}')
+				if msg[TYPE] == ELECT:
+					if msg[VOTE_GRANTED] == True:
+						votes.add(msg[SRC])
+				if len(votes) >= math.ceil((len(REPLICA_IDS) + 1 ) / 2) + 1:
+					print(f'ELECTION WON BY {MY_ID}, VOTES BY {votes}')
 					LEAD_ID = MY_ID
 					# Notify others
 					msg_ids = [''.join(random.choices(string.ascii_letters + string.digits, k=12)) for ii in range(len(REPLICA_IDS))]
@@ -171,11 +176,12 @@ def begin_election():
 				# (b) Another server establishes itself as leader
 				if msg[LEADER] != 'FFFF':
 					# If Leader's term is at least as large as the candidate's current term, the leader is recognized else ignore claim
-					if msg[KEY] >= CURRENT_TERM:
-						LEAD_ID = msg[LEADER]
+					# TODO: include current term in all other mesgs?
+					# if msg[KEY] >= CURRENT_TERM:
+					# 	LEAD_ID = msg[LEADER]
 
-						return
-					continue
+					return
+					# continue
 				# (c) a period of time goes by with no winner
 				total_time = round(Decimal(contact) - Decimal(LAST_CONTACT), 3)
 				print(f'Time taken: {total_time}')
