@@ -231,7 +231,7 @@ class Stats:
         print('Total get() with incorrect response:', self.incorrect)
         if len(self.latencies) > 0:
             print('Mean/Median query latency: {}sec/{}sec'.format(float(sum(self.latencies))/len(self.latencies),
-                                                                  self.latencies[len(self.latencies)/2]))
+                                                                  self.latencies[len(self.latencies)//2]))
 
 
 #######################################################################################################
