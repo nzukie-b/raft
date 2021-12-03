@@ -14,7 +14,7 @@ REPLICA_IDS = sys.argv[2:]
 # occur over this socket
 sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
 sock.connect(MY_ID)
-# sys.stdout = open('log.txt', 'w')
+sys.stdout = open('log.txt', 'a+')
 
 
 last = 0
@@ -53,7 +53,8 @@ def format_msg(src, dst, leader, msg_type, m_id, key=None, value=None, candidate
 			msg = {SRC: src, DST: dst, LEADER: leader, TYPE: msg_type, MID:m_id, KEY: key, VALUE: value}
 		elif value:
 			msg = {SRC: src, DST: dst, LEADER: leader, TYPE: msg_type, MID:m_id, VALUE: value}
-
+		else:
+			msg = {SRC: src, DST: dst, LEADER: leader, TYPE: msg_type, MID:m_id}
 	elif msg_type == ELECT:
 		# if vote_granted is None:
 		# 	msg = {SRC: src, DST: dst, LEADER: leader, TYPE: msg_type, MID:m_id, TERM: CURRENT_TERM, C_ID: candidate_id}
@@ -121,7 +122,7 @@ def handle_elect(sock, msg):
 	print(f"{msg[DST]} received a {msg[TYPE]} from {msg[SRC]}: {msg}")
 	vote_granted = VOTED_FOR == msg[C_ID]
 	print(VOTED_FOR)
-	if (VOTED_FOR is None or VOTED_FOR == msg[C_ID]) and msg[TERM] > CURRENT_TERM:
+	if (VOTED_FOR is None) and msg[TERM] > CURRENT_TERM:
 		vote_granted = True
 		VOTED_FOR = msg[C_ID]
 		# LEADER_ID = msg[C_ID]
@@ -131,14 +132,19 @@ def handle_elect(sock, msg):
 	return vote_granted	
 
 
-def update_term():
+def update_term(term=CURRENT_TERM):
 	global CURRENT_TERM, VOTED_FOR
-	CURRENT_TERM+=1
+	if term > CURRENT_TERM:
+		print(f'UPDATING TERM FROM {CURRENT_TERM} to {term}')
+		CURRENT_TERM = term
+	else:
+		CURRENT_TERM+=1
+		print(f'CURRENT TERM INCREMENTED TO {CURRENT_TERM}')
 	VOTED_FOR = None
 
-def begin_election(clock):
+def begin_election(start, original_sock):
 	global LEADER_ID, VOTED_FOR, CURRENT_TERM
-	"""Return the ID of the winner"""
+	# TODO: Leader election is sending too many packets? > 20000
 	# Begin Election
 	LEADER_ID = 'FFFF'
 	update_term()
@@ -149,8 +155,7 @@ def begin_election(clock):
 	msg_ids = [''.join(random.choices(string.ascii_letters + string.digits, k=12)) for ii in range(len(REPLICA_IDS))]
 	vote_requests = [format_msg(MY_ID, replica_id, LEADER_ID, ELECT, m_id, candidate_id=MY_ID) for replica_id, m_id in zip(REPLICA_IDS, msg_ids)]
 	for msg in vote_requests:
-		send_msg(sock, msg)
-	last = clock
+		send_msg(original_sock, msg)
 	# A candidate continues in this state until one of three things happens: 
 	all_servers = len(REPLICA_IDS) + 1
 	while True:
@@ -164,26 +169,29 @@ def begin_election(clock):
 					votes.add(msg[SRC])
 					print(f'Adding {msg[SRC]} to candidate votes {votes}')
 				# (a) It wins the election
-				if len(votes) >= (all_servers // 2) + 1:
-					print(f'ELECTION WON BY {MY_ID} with votes {votes}')
+				if len(votes) > (all_servers // 2):
+					print(f'ELECTION WON BY CANDIDATE {MY_ID} with votes {votes}')
 					LEADER_ID = MY_ID
-					msg_ids = [''.join(random.choices(string.ascii_letters + string.digits, k=12)) for ii in range(len(REPLICA_IDS))]
-					success_msgs = [format_msg(MY_ID, replica_id, LEADER_ID, APPEND_LOG, m_id) for replica_id, m_id in zip(REPLICA_IDS, msg_ids)]
-					for msg in vote_requests:
+					print(f'LEADER_ID: {LEADER_ID} {MY_ID}')
+					success_ids = [''.join(random.choices(string.ascii_letters + string.digits, k=12)) for ii in range(len(REPLICA_IDS))]
+					success_msgs = [format_msg(MY_ID, replica_id, LEADER_ID, APPEND_LOG, m_id) for replica_id, m_id in zip(REPLICA_IDS, success_ids)]
+					for msg in success_msgs:
 						send_msg(sock, msg)
 					return
 				#  (b) Another server establishes itself as leader
 				# If Leader's term is at least as large as the candidate's current term, the leader is recognized else ignore claim
 				if (msg[TYPE] == APPEND_LOG or msg[LEADER] != 'FFFF') and (msg_term is not None and msg_term >= CURRENT_TERM):
-					print(f'leadership claim: {msg}')
-					LEAD_ID = msg[LEADER]
-					CURRENT_TERM = msg[TERM]
+					print(f'Acknowledging leadership claim by: {msg[SRC]} {msg}')
+					LEADER_ID = msg[LEADER]
+					# update_term(msg_term)
+					CURRENT_TERM = msg_term
 					VOTED_FOR = None
 					return
 				# (c) a period of time goes by with no winner
 				clock = time.time()
-				total_time = round(Decimal(clock) - Decimal(last), 3)
-				if total_time >= election_timeout:
+				total_time = round(Decimal(clock) - Decimal(start), 3)
+				if total_time > election_timeout:
+					print(f'ELECTION BY {MY_ID} ENDED WITH NO WINNER')
 					return
 			continue
 
@@ -205,21 +213,18 @@ while True:
 			elif msg[TYPE] == APPEND_LOG:
 				contact = True
 				LEADER_ID = msg[LEADER]
-				TERM = msg[CURRENT_TERM]
-
-				# last = time.time()
+				CURRENT_TERM = msg[TERM]
 			# Handle noop messages. This may be removed from your final implementation
 			elif msg['type'] == 'noop':
 				print(f"{msg['dst']} received a NOOP from {msg['src']}")
 		if contact:
 			last = time.time() 
 			continue
-
-	# TODO: Where to update time to avoid a having replicas timeout during election???
-	clock = time.time()
-	total_time = round(Decimal(clock) - Decimal(last), 3)
-	print(total_time, election_timeout)
-	if total_time >= election_timeout:
-		begin_election(clock)
-		last = time.time()
+		# TODO: Leader election seems to send > 20,000 number of packets?
+		clock = time.time()
+		total_time = round(Decimal(clock) - Decimal(last), 3)
+		print(total_time, election_timeout)
+		if total_time > election_timeout:
+			begin_election(clock, sock)
+			last = clock
 		# last = clock
