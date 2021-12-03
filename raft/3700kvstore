@@ -24,7 +24,7 @@ TERMINATOR = b'}\n'
 buffer = b''
 CURRENT_TERM = 0
 VOTED_FOR = None
-LOG = []
+LOG = dict()
 LEADER_ID = 'FFFF'
 COMMIT_INDEX = 0
 LAST_APPLIED = 0
@@ -89,19 +89,30 @@ def send_msg(sock, msg):
 	sock.send(json.dumps(msg).encode() + b'\n')
 
 def handle_get(sock, msg):
-	global LEADER_ID
+	global LEADER_ID, LOG
 	print(f"{msg[DST]} received a {msg[TYPE]} from {msg[SRC]}: {msg}")
 	if msg[LEADER] != MY_ID:
 		response = format_msg(msg[DST], msg[SRC], LEADER_ID, REDIRECT, msg[MID])
+	elif msg[LEADER] == MY_ID:
+		val = LOG.get(msg[KEY])
+		if val:
+			response = format_msg(msg[DST], msg[SRC], LEADER_ID, OK, msg[MID], value=val)
+		else:
+			response = format_msg(msg[DST], msg[SRC], LEADER_ID, FAIL, msg[MID])
 	else:
 		response = format_msg(msg[DST], msg[SRC], LEADER_ID, FAIL, msg[MID])
 	send_msg(sock, response)
 
 def handle_put(sock, msg):
-	global LEADER_ID
+	global LEADER_ID, LOG
 	print(f"{msg[DST]} received a {msg[TYPE]} from {msg[SRC]}: {msg}")
 	if msg[LEADER] != MY_ID:
 		response = format_msg(msg[DST], msg[SRC], LEADER_ID, REDIRECT, msg[MID])
+	elif msg[LEADER] == MY_ID:
+		key = msg[KEY]
+		val = msg[VALUE]
+		LOG[key] = val
+		response = format_msg(msg[DST], msg[SRC], LEADER_ID, OK, msg[MID])
 	else:
 		response = format_msg(msg[DST], msg[SRC], LEADER_ID, FAIL, msg[MID])
 	send_msg(sock, response)
