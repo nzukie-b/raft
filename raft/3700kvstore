@@ -28,7 +28,6 @@ LOG = dict()
 LEADER_ID = 'FFFF'
 COMMIT_INDEX = 0
 LAST_APPLIED = 0
-# TODO: Replace default FFFF with None
 
 
 def format_msg(src, dst, leader, msg_type, m_id, key=None, value=None, candidate_id=None, vote_granted=None, entries=None, leader_indx=None):
@@ -120,9 +119,9 @@ def handle_put(sock, msg):
 def handle_elect(sock, msg):
 	global VOTED_FOR, LEADER_ID, CURRENT_TERM
 	print(f"{msg[DST]} received a {msg[TYPE]} from {msg[SRC]}: {msg}")
-	vote_granted = False
+	vote_granted = VOTED_FOR == msg[C_ID]
 	print(VOTED_FOR)
-	if VOTED_FOR is None or VOTED_FOR == msg[C_ID]:
+	if (VOTED_FOR is None or VOTED_FOR == msg[C_ID]) and msg[TERM] > CURRENT_TERM:
 		vote_granted = True
 		VOTED_FOR = msg[C_ID]
 		LEADER_ID = msg[C_ID]
@@ -138,7 +137,7 @@ def update_term():
 	VOTED_FOR = None
 
 def begin_election(clock):
-	global LEADER_ID, VOTED_FOR
+	global LEADER_ID, VOTED_FOR, CURRENT_TERM
 	"""Return the ID of the winner"""
 	# Begin Election
 	LEADER_ID = 'FFFF'
@@ -159,6 +158,7 @@ def begin_election(clock):
 		if sock in ready:
 			election_msgs = recv_msgs(sock)
 			for msg in election_msgs:
+				msg_term = msg.get(TERM)
 				print(f'CANDIDATE {MY_ID} RECEIVED {msg}')
 				if msg[TYPE] == ELECT and msg[VOTE_GRANTED] == True:
 					votes.add(msg[SRC])
@@ -175,9 +175,11 @@ def begin_election(clock):
 					return
 				#  (b) Another server establishes itself as leader
 				# If Leader's term is at least as large as the candidate's current term, the leader is recognized else ignore claim
-				if msg.get(APPEND_LOG) and msg[TERM] >= CURRENT_TERM:
+				if msg[LEADER] != 'FFFF' and (msg_term is not None and msg_term >= CURRENT_TERM):
 					print(f'leadership claim: {msg}')
 					LEAD_ID = msg[LEADER]
+					CURRENT_TERM = msg[TERM]
+					VOTED_FOR = None
 					return
 				# (c) a period of time goes by with no winner
 				clock = time.time()
@@ -206,9 +208,8 @@ while True:
 			# Handle noop messages. This may be removed from your final implementation
 			elif msg['type'] == 'noop':
 				print(f"{msg['dst']} received a NOOP from {msg['src']}")
-			# if msg[LEADER] != 'FFFF' or msg[TYPE] == ELECT:
-				# last = time.time()
-		if contact: 
+		if contact:
+			last = time.time() 
 			continue
 
 	# TODO: Where to update time to avoid a having replicas timeout during election???
