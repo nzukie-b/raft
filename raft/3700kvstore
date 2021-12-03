@@ -124,7 +124,7 @@ def handle_elect(sock, msg):
 	if (VOTED_FOR is None or VOTED_FOR == msg[C_ID]) and msg[TERM] > CURRENT_TERM:
 		vote_granted = True
 		VOTED_FOR = msg[C_ID]
-		LEADER_ID = msg[C_ID]
+		# LEADER_ID = msg[C_ID]
 		CURRENT_TERM = msg[TERM]
 	response = format_msg(msg[DST], msg[SRC], LEADER_ID, ELECT, msg[MID], candidate_id=msg[C_ID], vote_granted=vote_granted)
 	send_msg(sock, response)
@@ -164,8 +164,7 @@ def begin_election(clock):
 					votes.add(msg[SRC])
 					print(f'Adding {msg[SRC]} to candidate votes {votes}')
 				# (a) It wins the election
-				
-				if len(votes) >= all_servers // 2 + 1:
+				if len(votes) >= (all_servers // 2) + 1:
 					print(f'ELECTION WON BY {MY_ID} with votes {votes}')
 					LEADER_ID = MY_ID
 					msg_ids = [''.join(random.choices(string.ascii_letters + string.digits, k=12)) for ii in range(len(REPLICA_IDS))]
@@ -175,7 +174,7 @@ def begin_election(clock):
 					return
 				#  (b) Another server establishes itself as leader
 				# If Leader's term is at least as large as the candidate's current term, the leader is recognized else ignore claim
-				if msg[LEADER] != 'FFFF' and (msg_term is not None and msg_term >= CURRENT_TERM):
+				if (msg[TYPE] == APPEND_LOG or msg[LEADER] != 'FFFF') and (msg_term is not None and msg_term >= CURRENT_TERM):
 					print(f'leadership claim: {msg}')
 					LEAD_ID = msg[LEADER]
 					CURRENT_TERM = msg[TERM]
@@ -203,6 +202,10 @@ while True:
 				handle_put(sock, msg)
 			elif msg[TYPE] == ELECT:
 				contact = handle_elect(sock, msg)
+			elif msg[TYPE] == APPEND_LOG:
+				contact = True
+				LEADER_ID = msg[LEADER]
+				TERM = msg[CURRENT_TERM]
 
 				# last = time.time()
 			# Handle noop messages. This may be removed from your final implementation
