@@ -14,7 +14,8 @@ REPLICA_IDS = sys.argv[2:]
 # occur over this socket
 sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
 sock.connect(MY_ID)
-sys.stdout = open('log.txt', 'a+')
+#sys.stdout = open('log.txt', 'a+')
+sys.stdout = open('log2.txt', 'a+')
 
 
 last = 0
@@ -66,7 +67,7 @@ def format_msg(src, dst, leader, msg_type, m_id, key=None, value=None, candidate
 	return msg
 
 # Receive 
-def recv_msgs(sock):
+def recv_msgs(sock, msgs_dealt_with):
 	global buffer
 
 	fresh_buf = sock.recv(16384)
@@ -82,7 +83,13 @@ def recv_msgs(sock):
 		position = buffer.find(TERMINATOR) + len(TERMINATOR)
 		msgs.append(json.loads(buffer[:position - 1].decode()))  # -1 to remove the \n, which json.loads won't want
 		buffer = buffer[position:]
-	return msgs
+	#put_msgs = [msg for msg in msgs if msg[TYPE] == PUT]
+	#for each in put_msgs:
+		#print("PUT PUT", each)
+	new_msgs = [new_msg for new_msg in msgs if new_msg not in msgs_dealt_with]
+	print("Messages dealt with: ", msgs_dealt_with)
+	print("New messages: ", new_msgs)
+	return new_msgs
 
 def send_msg(sock, msg):
 	print(f'SENDING: {msg}')
@@ -101,8 +108,10 @@ def handle_get(sock, msg):
 		else:
 			print(f'VALUE NOT FOUND FOR KEY {msg[KEY]}')
 			response = format_msg(msg[DST], msg[SRC], LEADER_ID, FAIL, msg[MID])
-	else:
+	elif msg[LEADER] == "FFFF":
 		response = format_msg(msg[DST], msg[SRC], LEADER_ID, FAIL, msg[MID])
+	else:
+		raise Exception("We should never see this")
 	send_msg(sock, response)
 
 def handle_put(sock, msg):
@@ -117,8 +126,10 @@ def handle_put(sock, msg):
 		LOG[key] = val
 		print(LOG[key])
 		response = format_msg(msg[DST], msg[SRC], LEADER_ID, OK, msg[MID])
-	else:
+	elif msg[LEADER] == "FFFF":
 		response = format_msg(msg[DST], msg[SRC], LEADER_ID, FAIL, msg[MID])
+	else:
+		raise Exception("We should never see this")
 	send_msg(sock, response)
 
 def handle_elect(sock, msg):
@@ -167,13 +178,21 @@ def begin_election(start, original_sock):
 		send_msg(original_sock, msg)
 	# A candidate continues in this state until one of three things happens: 
 	all_servers = len(REPLICA_IDS) + 1
+	msgs_dealt_with = []
+	msgs_to_keep = []
 	while True:
 		ready = select.select([sock], [], [], SELECT_WAIT_TIME)[0]
 		if sock in ready:
-			election_msgs = recv_msgs(sock)
+			election_msgs = recv_msgs(sock, msgs_dealt_with)
+			print("election_msgs", election_msgs)
+			new_msgs_to_keep = [msg for msg in election_msgs if msg[TYPE] != ELECT and msg[TYPE] != APPEND_LOG]
+			msgs_to_keep = msgs_to_keep + new_msgs_to_keep
+			print("msgs_to_keep", msgs_to_keep)
 			for msg in election_msgs:
 				msg_term = msg.get(TERM)
 				print(f'CANDIDATE {MY_ID} RECEIVED {msg}')
+				if msg[TYPE] != ELECT and msg[TYPE] != APPEND_LOG:
+					send_msg(sock, format_msg(msg[DST], msg[SRC], LEADER_ID, FAIL, msg[MID]))
 				if msg[TYPE] == ELECT and msg[VOTE_GRANTED] == True:
 					votes.add(msg[SRC])
 					print(f'Adding {msg[SRC]} to candidate votes {votes}')
@@ -186,7 +205,7 @@ def begin_election(start, original_sock):
 					success_msgs = [format_msg(MY_ID, replica_id, LEADER_ID, APPEND_LOG, m_id, entries=LOG) for replica_id, m_id in zip(REPLICA_IDS, success_ids)]
 					for msg in success_msgs:
 						send_msg(sock, msg)
-					return
+					return []
 				#  (b) Another server establishes itself as leader
 				# If Leader's term is at least as large as the candidate's current term, the leader is recognized else ignore claim
 				if (msg[TYPE] == APPEND_LOG) and (msg_term is not None and msg_term >= CURRENT_TERM):
@@ -195,22 +214,27 @@ def begin_election(start, original_sock):
 					# update_term(msg_term)
 					CURRENT_TERM = msg_term
 					# VOTED_FOR = None
-					return
+					return []
 				# (c) a period of time goes by with no winner
 				clock = time.time()
 				total_time = round(Decimal(clock) - Decimal(start), 3)
 				if total_time > election_timeout:
 					print(f'ELECTION BY {MY_ID} ENDED WITH NO WINNER')
-					return
-			continue
+					return []
+	return []
 
 # last = time.time()
+msgs_received_during_election = []
 while True:
 	ready = select.select([sock], [], [], SELECT_WAIT_TIME)[0]
 	election_timeout = random.choice(TIMEOUT_RANGE) / 1000
 	
 	if sock in ready:
-		msgs = recv_msgs(sock)
+		msgs_dealt_with = []
+		msgs = recv_msgs(sock, msgs_dealt_with)
+		if len(msgs_received_during_election) > 0:
+			msgs = msgs_received_during_election + msgs
+			print("combined messages: ", msgs)
 		contact = False
 		for msg in msgs:
 			if msg[TYPE] == GET:
@@ -224,11 +248,13 @@ while True:
 				contact = True
 				LEADER_ID = msg[LEADER]
 				CURRENT_TERM = msg[TERM]
-				print(f'{MY_ID} updating {LOG} with {msg[LOG_ENTRIES]}')
+				#print(f'{MY_ID} updating {LOG} with {msg[LOG_ENTRIES]}')
 				LOG.update(msg[LOG_ENTRIES])
 			# Handle noop messages. This may be removed from your final implementation
 			elif msg['type'] == 'noop':
 				print(f"{msg['dst']} received a NOOP from {msg['src']}")
+			# keep track of messages we have already dealt with
+			msgs_dealt_with.append(msg)
 		if contact:
 			last = time.time() 
 			continue
@@ -243,7 +269,8 @@ while True:
 		total_time = round(Decimal(clock) - Decimal(last), 3)
 		print(total_time, election_timeout)
 		if total_time > election_timeout and LEADER_ID != MY_ID:
-			begin_election(clock, sock)
+			msgs_received_during_election = begin_election(clock, sock)
+			print("messages from election: ", msgs_received_during_election)
 			VOTED_FOR = None
 			last = clock
 		# last = clock
