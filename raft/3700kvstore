@@ -265,8 +265,6 @@ while True:
 			success_msgs = [format_msg(MY_ID, replica_id, LEADER_ID, APPEND_LOG, m_id, entries=[]) for replica_id, m_id in zip(REPLICA_IDS, success_ids)]
 			for msg in success_msgs:
 				send_msg(sock, msg)
-
-		
 		clock = time.time()
 		total_time = round(Decimal(clock) - Decimal(last), 3)
 		print(f'TIME TAKEN: {total_time}, ELECTION TIMEOUE: {election_timeout}')
@@ -275,7 +273,6 @@ while True:
 			old_msgs = old_msgs + non_election_msgs
 			print("messages from election: ", non_election_msgs)
 			VOTED_FOR = None
-			last = clock
-		# last = clock
+		last = clock
 
 print(LOG)
