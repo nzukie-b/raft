@@ -3,6 +3,7 @@
 import sys, socket, select, time, json, random, string, math
 from constants import *
 from decimal import *
+from utils import timeout
 
 # Your ID number
 MY_ID = sys.argv[1]
@@ -25,7 +26,7 @@ TERMINATOR = b'}\n'
 buffer = b''
 CURRENT_TERM = 0
 VOTED_FOR = None
-LOG = dict()
+LOG = dict(dict())
 LEADER_ID = 'FFFF'
 COMMIT_INDEX = 0
 LAST_APPLIED = 0
@@ -103,7 +104,8 @@ def handle_get(sock, msg):
 		response = format_msg(msg[DST], msg[SRC], LEADER_ID, REDIRECT, msg[MID])
 	elif msg[LEADER] == MY_ID:
 		print(f'{MY_ID} RETRIEVING VALUE FOR KEY: {msg[KEY]}')
-		val = LOG.get(msg[KEY])
+		# TODO: create class for this log
+		val = LOG.get(CURRENT_TERM).get(COMMIT_INDEX)
 		if val:
 			response = format_msg(msg[DST], msg[SRC], LEADER_ID, OK, msg[MID], value=val)
 		else:
@@ -115,23 +117,89 @@ def handle_get(sock, msg):
 		raise Exception("We should never see this")
 	send_msg(sock, response)
 
+def send_append_entries(replica_OKs, start_time):
+	# send append entries with data to all other replicas
+	replica_ids_not_responded = [r_id for r_id in REPLICA_IDS if r_id not in replica_OKs]
+	success_ids = [''.join(random.choices(string.ascii_letters + string.digits, k=12)) for ii in
+				   range(len(replica_ids_not_responded))]
+	append_entry_msgs = [format_msg(MY_ID, replica_id, LEADER_ID, APPEND_LOG, m_id, entries=[LOG]) for replica_id, m_id
+						 in
+						 zip(replica_ids_not_responded, success_ids)]
+	for msg in append_entry_msgs:
+		send_msg(sock, msg)
+	other_msgs = set()
+	while True:
+		new_msgs = recv_msgs(sock, list(other_msgs))
+		other_msgs = []
+		# then check if we have majority
+		for msg in new_msgs:
+			if msg[TYPE] == OK and msg[MID] in success_ids:
+				replica_OKs.add(msg[SRC])
+			else:
+				other_msgs.add(msg)
+		stop_time = time.time()
+		append_entries_timeout = random.choice(TIMEOUT_RANGE) / 1000
+		if round(Decimal(stop_time) - Decimal(start_time), 3) > append_entries_timeout:
+			break
+	return replica_OKs, other_msgs
+
+
 def handle_put(sock, msg):
-	global LEADER_ID, LOG
+	global LEADER_ID, LOG, COMMIT_INDEX
 	print(f"{msg[DST]} received a {msg[TYPE]} from {msg[SRC]}: {msg}")
 	if msg[LEADER] != MY_ID:
 		response = format_msg(msg[DST], msg[SRC], LEADER_ID, REDIRECT, msg[MID])
 	elif msg[LEADER] == MY_ID:
+		replica_OKs = set()
+		replica_OKs.add(MY_ID)
+		while True:
+			start_time = time.time()
+			replica_OK_msgs, other_msgs = send_append_entries(replica_OKs, start_time)
+			if len(replica_OK_msgs) > ((len(REPLICA_IDS) + 1) // 2):
+				break
+		# Note: if we never get a majority we will be stuck in this loop :)
 		key = msg[KEY]
 		val = msg[VALUE]
 		print(f'{MY_ID} STORING KEY: {key} VALUE: {val}')
-		LOG[key] = val
+		key_val = (key, val)
+		index_dict = dict()
+		index_dict[COMMIT_INDEX] = key_val
+		LOG[CURRENT_TERM].update(index_dict)
+		COMMIT_INDEX += 1
 		print(LOG[key])
 		response = format_msg(msg[DST], msg[SRC], LEADER_ID, OK, msg[MID])
+
 	elif msg[LEADER] == "FFFF":
 		response = format_msg(msg[DST], msg[SRC], LEADER_ID, FAIL, msg[MID])
 	else:
 		raise Exception("We should never see this")
 	send_msg(sock, response)
+
+
+def handle_log(sock, msg):
+	global CURRENT_TERM, LOG
+	success = True
+	# reply false if term is less than current term
+	msg_term = msg[TERM]
+	if (msg_term < CURRENT_TERM):
+		success = False
+	#  Reply false if log doesn’t contain an entry at prevLogIndex whose term matches prevLogTerm
+	prev_log_index = len(LOG) - 1
+
+
+
+
+
+	contact = True
+	LEADER_ID = msg[LEADER]
+
+	if msg_term > CURRENT_TERM:
+		VOTED_FOR = None
+	CURRENT_TERM = msg_term
+	# might need to look at this
+	LOG.update(msg[LOG_ENTRIES])
+
+
 
 def handle_elect(sock, msg):
 	global VOTED_FOR, LEADER_ID, CURRENT_TERM
@@ -243,13 +311,7 @@ while True:
 				if MY_ID == msg[C_ID]: continue
 				contact = handle_elect(sock, msg)
 			elif msg[TYPE] == APPEND_LOG:
-				contact = True
-				LEADER_ID = msg[LEADER]
-				msg_term = msg[TERM]
-				if msg_term > CURRENT_TERM:
-					VOTED_FOR = None
-				CURRENT_TERM = msg_term
-				LOG.update(msg[LOG_ENTRIES])
+				handle_log(sock, msg)
 			# Handle noop messages. This may be removed from your final implementation
 			elif msg['type'] == 'noop':
 				print(f"{msg['dst']} received a NOOP from {msg['src']}")
