@@ -1,5 +1,10 @@
-import signal
-
+import signal, json
+class LogEntry:
+    def __init__(self, term, key, val):
+        self.term = term
+        self.key = key
+        self.val = val
+    
 # Timeout decorater from: https://www.saltycrane.com/blog/2010/04/using-python-timeout-decorator-uploading-s3/
 class TimeoutError(Exception):
     def __init__(self, value = "Timed Out"):
@@ -26,3 +31,7 @@ def timeout(seconds_before_timeout):
         new_f.func_name = f.func_name
         return new_f
     return decorate
+
+
+
+

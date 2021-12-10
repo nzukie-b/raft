@@ -3,7 +3,7 @@
 import sys, socket, select, time, json, random, string, math
 from constants import *
 from decimal import *
-from utils import timeout
+from utils import *
 
 # Your ID number
 MY_ID = sys.argv[1]
@@ -26,14 +26,18 @@ TERMINATOR = b'}\n'
 buffer = b''
 CURRENT_TERM = 0
 VOTED_FOR = None
-LOG = dict(dict())
+LOG = []
+LOCAL_STATE = dict()
+
 LEADER_ID = 'FFFF'
+# Index of last log committed by leader
 COMMIT_INDEX = 0
+# Index of last log applied to LOCAL_STATE
 LAST_APPLIED = 0
 
 
-def format_msg(src, dst, leader, msg_type, m_id, key=None, value=None, candidate_id=None, vote_granted=None, entries=None, leader_indx=None):
-	global CURRENT_TERM
+def format_msg(src, dst, leader, msg_type, m_id, key=None, value=None, candidate_id=None, vote_granted=None, entries=None, last_log_indx=None, last_log_term=None):
+	global CURRENT_TERM, COMMIT_INDEX, LAST_APPLIED
 	if msg_type == GET:
 		if key:
 			msg = {SRC: src, DST: dst, LEADER: leader, TYPE: msg_type, MID:m_id, KEY: key}
@@ -63,7 +67,8 @@ def format_msg(src, dst, leader, msg_type, m_id, key=None, value=None, candidate
 		# else:
 			msg = {SRC: src, DST: dst, LEADER: leader, TYPE: msg_type, MID:m_id, TERM: CURRENT_TERM, C_ID: candidate_id, VOTE_GRANTED: vote_granted}
 	elif msg_type == APPEND_LOG:
-		msg = {SRC: src, DST: dst, LEADER: leader, TYPE: msg_type, MID:m_id, TERM: CURRENT_TERM, LAST_LOG_INDX: None, LAST_LOG_TERM: None, LOG_ENTRIES: entries, LEADER_INDX: leader_indx}
+		msg = {SRC: src, DST: dst, LEADER: leader, TYPE: msg_type, MID:m_id, TERM: CURRENT_TERM, 
+				LAST_LOG_INDX: last_log_indx, LAST_LOG_TERM: last_log_term, LOG_ENTRIES: entries, LEADER_INDX: COMMIT_INDEX}
 	
 	return msg
 
@@ -105,7 +110,7 @@ def handle_get(sock, msg):
 	elif msg[LEADER] == MY_ID:
 		print(f'{MY_ID} RETRIEVING VALUE FOR KEY: {msg[KEY]}')
 		# TODO: create class for this log
-		val = LOG.get(CURRENT_TERM).get(COMMIT_INDEX)
+		val = LOCAL_STATE.get(msg[KEY])
 		if val:
 			response = format_msg(msg[DST], msg[SRC], LEADER_ID, OK, msg[MID], value=val)
 		else:
@@ -117,15 +122,60 @@ def handle_get(sock, msg):
 		raise Exception("We should never see this")
 	send_msg(sock, response)
 
-def send_append_entries(replica_OKs, start_time):
+def handle_put(sock, msg):
+	global LEADER_ID, LOG, COMMIT_INDEX, CURRENT_TERM
+	print(f"{msg[DST]} received a {msg[TYPE]} from {msg[SRC]}: {msg}")
+	if msg[LEADER] != MY_ID:
+		response = format_msg(msg[DST], msg[SRC], LEADER_ID, REDIRECT, msg[MID])
+	elif msg[LEADER] == MY_ID:
+		# The leader appends the command to its log as a new entry,
+		key = msg[KEY]
+		val = msg[VALUE]
+		entry = LogEntry(CURRENT_TERM, key, val)
+		LOG.append(entry)
+		# the leader includes the index and term of the entry in its log that immediately precedes the new entries
+		last_log = LOG[-1] if len(LOG) > 1 else None
+		replica_OKs = {MY_ID}
+		# then issues AppendEntries RPCs in parallel to each of the other servers to replicate the entry
+		other_msgs = set()
+		while True:
+			start_time = time.time()
+			# replica_OKs should update in send_append_entries so we can keep using it as an arg
+			received_OKs, received_msgs = send_append_entries(replica_OKs, start_time, last_log)
+			other_msgs.update(set(received_msgs))
+			if len(received_OKs) > ((len(REPLICA_IDS) + 1) // 2):
+				break
+		# Note: if we never get a majority we will be stuck in this loop :)
+		# When the entry has been safely replicated, the leader applies the entry to its state machine
+		print(f'{MY_ID} STORING KEY: {key} VALUE: {val}')
+		LOCAL_STATE[key] = val
+		COMMIT_INDEX = max(len(LOG) - 1, 0)
+		response = format_msg(msg[DST], msg[SRC], LEADER_ID, OK, msg[MID])
+
+	elif msg[LEADER] == "FFFF":
+		response = format_msg(msg[DST], msg[SRC], LEADER_ID, FAIL, msg[MID])
+	else:
+		raise Exception("We should never see this")
+	send_msg(sock, response)
+	# TODO: Do something with this
+	return other_msgs
+
+def send_append_entries(replica_OKs, start_time, last_log):
+	global LOG
 	# send append entries with data to all other replicas
+	# should  leader send append entries to all replicas to prevent election from starting during this?
 	replica_ids_not_responded = [r_id for r_id in REPLICA_IDS if r_id not in replica_OKs]
-	success_ids = [''.join(random.choices(string.ascii_letters + string.digits, k=12)) for ii in
-				   range(len(replica_ids_not_responded))]
-	append_entry_msgs = [format_msg(MY_ID, replica_id, LEADER_ID, APPEND_LOG, m_id, entries=[LOG]) for replica_id, m_id
-						 in
-						 zip(replica_ids_not_responded, success_ids)]
+	msg_ids = [''.join(random.choices(string.ascii_letters + string.digits, k=12)) 
+					for ii in range(len(replica_ids_not_responded))]
+	last_log_term, last_log_indx = None, None
+	if last_log is not None:
+		last_log_indx = LOG.index(last_log)
+		last_log_term = last_log.term
+	append_entry_msgs = [format_msg(MY_ID, replica_id, LEADER_ID, APPEND_LOG, m_id, entries=LOG, last_log_indx=last_log_index, last_log_term=last_log_term) 
+							for replica_id, m_id in zip(replica_ids_not_responded, msg_ids)]
+							
 	for msg in append_entry_msgs:
+		# receivers will update their local state to match this
 		send_msg(sock, msg)
 	other_msgs = set()
 	while True:
@@ -133,8 +183,11 @@ def send_append_entries(replica_OKs, start_time):
 		other_msgs = []
 		# then check if we have majority
 		for msg in new_msgs:
-			if msg[TYPE] == OK and msg[MID] in success_ids:
+			if msg[TYPE] == OK and msg[MID] in msg_ids:
 				replica_OKs.add(msg[SRC])
+			elif msg[TYPE] == FAIL and msg[MID] in msg_ids:
+				# TODO: something
+				pass
 			else:
 				other_msgs.add(msg)
 		stop_time = time.time()
@@ -143,52 +196,19 @@ def send_append_entries(replica_OKs, start_time):
 			break
 	return replica_OKs, other_msgs
 
-
-def handle_put(sock, msg):
-	global LEADER_ID, LOG, COMMIT_INDEX
-	print(f"{msg[DST]} received a {msg[TYPE]} from {msg[SRC]}: {msg}")
-	if msg[LEADER] != MY_ID:
-		response = format_msg(msg[DST], msg[SRC], LEADER_ID, REDIRECT, msg[MID])
-	elif msg[LEADER] == MY_ID:
-		replica_OKs = set()
-		replica_OKs.add(MY_ID)
-		while True:
-			start_time = time.time()
-			replica_OK_msgs, other_msgs = send_append_entries(replica_OKs, start_time)
-			if len(replica_OK_msgs) > ((len(REPLICA_IDS) + 1) // 2):
-				break
-		# Note: if we never get a majority we will be stuck in this loop :)
-		key = msg[KEY]
-		val = msg[VALUE]
-		print(f'{MY_ID} STORING KEY: {key} VALUE: {val}')
-		key_val = (key, val)
-		index_dict = dict()
-		index_dict[COMMIT_INDEX] = key_val
-		LOG[CURRENT_TERM].update(index_dict)
-		COMMIT_INDEX += 1
-		print(LOG[key])
-		response = format_msg(msg[DST], msg[SRC], LEADER_ID, OK, msg[MID])
-
-	elif msg[LEADER] == "FFFF":
-		response = format_msg(msg[DST], msg[SRC], LEADER_ID, FAIL, msg[MID])
-	else:
-		raise Exception("We should never see this")
-	send_msg(sock, response)
-
-
 def handle_log(sock, msg):
-	global CURRENT_TERM, LOG
+	global CURRENT_TERM, LOG, LOCAL_STATE
 	success = True
 	# reply false if term is less than current term
 	msg_term = msg[TERM]
+	last_local_log = LOG[-1] if len(log) > 0 else None
 	if (msg_term < CURRENT_TERM):
+		success = False 
+	elif last_local_log is not None and (last_local_log.term == msg[LAST_LOG_TERM]):
 		success = False
+
 	#  Reply false if log doesn’t contain an entry at prevLogIndex whose term matches prevLogTerm
 	prev_log_index = len(LOG) - 1
-
-
-
-
 
 	contact = True
 	LEADER_ID = msg[LEADER]
@@ -323,9 +343,9 @@ while True:
 			continue
 		if LEADER_ID == MY_ID:
 			# Prevent other elections
-			success_ids = [''.join(random.choices(string.ascii_letters + string.digits, k=12)) for ii in range(len(REPLICA_IDS))]
-			success_msgs = [format_msg(MY_ID, replica_id, LEADER_ID, APPEND_LOG, m_id, entries=[]) for replica_id, m_id in zip(REPLICA_IDS, success_ids)]
-			for msg in success_msgs:
+			heartbeat_ids = [''.join(random.choices(string.ascii_letters + string.digits, k=12)) for ii in range(len(REPLICA_IDS))]
+			hearbeat_msgs = [format_msg(MY_ID, replica_id, LEADER_ID, APPEND_LOG, m_id, entries=[]) for replica_id, m_id in zip(REPLICA_IDS, heartbeat_ids)]
+			for msg in hearbeat_msgs:
 				send_msg(sock, msg)
 		clock = time.time()
 		total_time = round(Decimal(clock) - Decimal(last), 3)
