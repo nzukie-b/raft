@@ -1,10 +1,11 @@
 import signal, json
-class LogEntry:
-    def __init__(self, term, key, val):
-        self.term = term
-        self.key = key
-        self.val = val
-    
+
+
+class LogEntry(dict):
+    def __init__(self, term, key, value):
+        dict.__init__(self, term=term, key=key, value=value)
+
+
 # Timeout decorater from: https://www.saltycrane.com/blog/2010/04/using-python-timeout-decorator-uploading-s3/
 class TimeoutError(Exception):
     def __init__(self, value = "Timed Out"):
