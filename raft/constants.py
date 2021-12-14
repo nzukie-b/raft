@@ -31,4 +31,6 @@ FOLLOWER = 'follower'
 
 
 # Range for election timeout
-TIMEOUT_RANGE = range(200, 700)
+TIMEOUT_RANGE = range(301, 700)
+
+LOG_TIMEOUT = range(200, 300)

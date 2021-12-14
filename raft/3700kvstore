@@ -132,7 +132,7 @@ def handle_put(sock, msg):
 		entry = LogEntry(CURRENT_TERM, key, val)
 		LOG.append(entry)
 		# the leader includes the index and term of the entry in its log that immediately precedes the new entries
-		last_log = LOG[-1] if len(LOG) > 1 else None
+		last_log = LOG[-1] if len(LOG) > 0 else None
 		replica_OKs = {MY_ID}
 		# then issues AppendEntries RPCs in parallel to each of the other servers to replicate the entry
 		while True:
@@ -144,7 +144,7 @@ def handle_put(sock, msg):
 				break
 		# Note: if we never get a majority we will be stuck in this loop :)
 		# When the entry has been safely replicated, the leader applies the entry to its state machine
-		print(f'{MY_ID} STORING KEY: {key} VALUE: {val}')
+		print(f'{MY_ID} STORING KEY: {key} VALUE: {val} REPLICATED BY {received_OKs}')
 		LOCAL_STATE[key] = val
 		COMMIT_INDEX = max(len(LOG) - 1, 0)
 		response = format_msg(msg[DST], msg[SRC], LEADER_ID, OK, msg[MID])
@@ -164,8 +164,8 @@ def send_append_entries(replica_OKs, start_time, last_log):
 	replica_ids_not_responded = [r_id for r_id in REPLICA_IDS if r_id not in replica_OKs]
 	msg_ids = [''.join(random.choices(string.ascii_letters + string.digits, k=12)) 
 					for ii in range(len(replica_ids_not_responded))]
-	responded_msg_ids = [''.join(random.choices(string.ascii_letters + string.digits, k=12))
-					for ii in range(len(replica_OKs))]
+	heartbeat_ids = [''.join(random.choices(string.ascii_letters + string.digits, k=12))
+					for ii in range(len(replica_OKs) - 1)]
 	last_log_term, last_log_indx = None, None
 	if last_log is not None:
 		last_log_indx = LOG.index(last_log)
@@ -174,85 +174,90 @@ def send_append_entries(replica_OKs, start_time, last_log):
 							for replica_id, m_id in zip(replica_ids_not_responded, msg_ids)]
 	# TODO: DON'T INCLUDE OURSELF!
 	heartbeat_msgs = [format_msg(MY_ID, replica_id, LEADER_ID, APPEND_LOG, m_id, entries=[], last_log_indx=last_log_indx, last_log_term=last_log_term)
-						for replica_id, m_id in zip(replica_OKs, responded_msg_ids)]
+						for replica_id, m_id in zip(replica_OKs, heartbeat_ids) if replica_id != MY_ID]
+	print(len(heartbeat_msgs), len(REPLICA_IDS))
 							
 	for msg in append_entry_msgs:
 		# receivers will update their local state to match this
 		send_msg(sock, msg)
 	for msg in heartbeat_msgs:
-		# receivers will update their local state to match this
 		send_msg(sock, msg)
 
 	other_msgs = []
+	# TODO: maybe change timeout length
+	append_entries_timeout = random.choice(LOG_TIMEOUT) / 1000
 	while True:
-		new_msgs = recv_msgs(sock, other_msgs)
-		other_msgs = []
-		# then check if we have majority
-		for msg in new_msgs:
-			if msg[TYPE] == OK and msg[MID] in msg_ids:
-				replica_OKs.add(msg[SRC])
-			elif msg[TYPE] == FAIL and msg[MID] in msg_ids:
-				# TODO: something
-				pass
-			else:
-				if msg not in other_msgs:
-					other_msgs.append(msg)
-		stop_time = time.time()
-		# TODO: maybe change timeout length
-		append_entries_timeout = random.choice(TIMEOUT_RANGE) / 1000
-		if round(Decimal(stop_time) - Decimal(start_time), 3) > append_entries_timeout:
-			break
+		ready = select.select([sock], [], [], SELECT_WAIT_TIME)[0]
+		if sock in ready:
+			new_msgs = recv_msgs(sock, other_msgs)
+			other_msgs = []
+			# then check if we have majority
+			for msg in new_msgs:
+				if msg[TYPE] == OK and msg[MID] in msg_ids:
+					replica_OKs.add(msg[SRC])
+				elif msg[TYPE] == FAIL and msg[MID] in msg_ids:
+					# TODO: something
+					pass
+				else:
+					if msg not in other_msgs:
+						other_msgs.append(msg)
+			stop_time = time.time()
+			if round(Decimal(stop_time) - Decimal(start_time), 3) > append_entries_timeout:
+				break
 	return replica_OKs, other_msgs
 
 
 def handle_log(sock, msg):
-	global CURRENT_TERM, LOG, LOCAL_STATE, COMMIT_INDEX, VOTED_FOR, LEADER_ID
+	global CURRENT_TERM, LOG, LOCAL_STATE, COMMIT_INDEX, VOTED_FOR, LEADER_ID, LAST_APPLIED
 	success = True
 	msg_term = msg[TERM]
+	update_term(msg_term)
 
 	# if received a heart beat
-	if len(msg[LOG_ENTRIES]) == 0:
+	if len(msg[LOG_ENTRIES]) == 0 and msg[LEADER] != 'FFFF':
 		LEADER_ID = msg[LEADER]
-		if msg_term > CURRENT_TERM:
-			VOTED_FOR = None
-			CURRENT_TERM = msg_term
-	else:
+		# print(f'{MY_ID} received heartbeat')
+	elif msg[SRC] != MY_ID:
 		# reply false if term is less than current term
 		last_local_log = LOG[-1] if len(LOG) > 0 else None
 		if msg_term < CURRENT_TERM:
 			success = False
-		if msg_term > CURRENT_TERM:
-			VOTED_FOR = None
-			CURRENT_TERM = msg_term
+		# if msg_term > CURRENT_TERM:
+		# 	VOTED_FOR = None
+		# 	CURRENT_TERM = msg_term
 		elif last_local_log is not None and (last_local_log.get(TERM) != msg[LAST_LOG_TERM]):
 			success = False
 
 		# ensure logs are equal, make them equal if not
 		log_entries = msg[LOG_ENTRIES]
-		last_matching_index = None
-		for i in range(len(log_entries)):
-			if LOG and LOG[i] and LOG[i].get(TERM) != log_entries[i].get(TERM):
-				LOG = LOG[0:i] + log_entries[i::]
+		last_matching_index = max(len(LOG) - 1, 0)
+		for i in range(len(LOG)):
+			if LOG[i].get(TERM) != log_entries[i].get(TERM):
 				last_matching_index = i
 				break
+		print(f'{MY_ID} last_matching_index: {last_matching_index}')
+		LOG = LOG[0:last_matching_index] + log_entries[last_matching_index::]
 		# update local state
-		if last_matching_index is not None:
-			for i in range(last_matching_index, len(log_entries)):
-				log_entry = LOG[i]
-				LOCAL_STATE[log_entry.get(KEY)] = log_entry.get(VALUE)
+		# if last_matching_index is not None:
+		for i in range(last_matching_index, len(log_entries)):
+			log_entry = LOG[i]
+			print(f'{MY_ID} APPLYING {log_entry} to LOCAL_STATE')
+			LOCAL_STATE[log_entry.get(KEY)] = log_entry.get(VALUE)
+			LAST_APPLIED = i
+
 
 		#  If leaderCommit > commitIndex, set commitIndex = min(leaderCommit, index of last new entry)
-		COMMIT_INDEX = len(LOG)
+		COMMIT_INDEX = max(len(LOG) - 1, 0)
 
 		# send okay/fail message back
 		if success:
 			# return okay with updated leader
 			LEADER_ID = msg[LEADER]
-			ok_msg = format_msg(msg[DST], msg[SRC], LEADER_ID, OK, msg[MID])
+			ok_msg = format_msg(MY_ID, msg[SRC], LEADER_ID, OK, msg[MID])
 			send_msg(sock, ok_msg)
 		else:
 			# return fail
-			fail_msg = format_msg(msg[DST], msg[SRC], LEADER_ID, FAIL, msg[MID])
+			fail_msg = format_msg(MY_ID, msg[SRC], LEADER_ID, FAIL, msg[MID])
 			send_msg(sock, fail_msg)
 
 
@@ -262,36 +267,35 @@ def handle_elect(sock, msg):
 	#  New election called
 	if msg[TERM] > CURRENT_TERM:
 		LEADER_ID = 'FFFF'
-		VOTED_FOR = None
-		CURRENT_TERM = msg[TERM]
+		update_term(msg[TERM])
 	vote_granted = VOTED_FOR == msg[C_ID]
-	print(VOTED_FOR)
 	if VOTED_FOR is None:
 		vote_granted = True
 		VOTED_FOR = msg[C_ID]
-		# LEADER_ID = msg[C_ID]
-		# CURRENT_TERM = msg[TERM]
+	print(VOTED_FOR)
 	response = format_msg(msg[DST], msg[SRC], LEADER_ID, ELECT, msg[MID], candidate_id=msg[C_ID], vote_granted=vote_granted)
 	send_msg(sock, response)
 	return vote_granted	
 
 
-def update_term(term=CURRENT_TERM):
+def update_term(term):
 	global CURRENT_TERM, VOTED_FOR
+	"""Update CURRENT_TERM to the provided term, and clears VOTED_FOR"""
+	if term < CURRENT_TERM:
+		print(f'Term should not decrease')
+		return
 	if term > CURRENT_TERM:
 		print(f'UPDATING TERM FROM {CURRENT_TERM} to {term}')
-		CURRENT_TERM = term
-	else:
-		CURRENT_TERM+=1
-		print(f'CURRENT TERM INCREMENTED TO {CURRENT_TERM}')
-	VOTED_FOR = None
+		VOTED_FOR = None
+		print(f'CLEARING VOTED_FOR')
+	CURRENT_TERM = term
 
 
 def begin_election(start, original_sock):
 	global LEADER_ID, VOTED_FOR, CURRENT_TERM, LOG
 	# Begin Election
 	LEADER_ID = 'FFFF'
-	update_term()
+	update_term(CURRENT_TERM + 1)
 	election_timeout = random.choice(TIMEOUT_RANGE) / 1000
 	print(f'{MY_ID} STARTING LEADER ELECTION FOR TERM {CURRENT_TERM}') 
 	VOTED_FOR = MY_ID
@@ -309,13 +313,16 @@ def begin_election(start, original_sock):
 		ready = select.select([sock], [], [], SELECT_WAIT_TIME)[0]
 		if sock in ready:
 			election_msgs = recv_msgs(sock, msgs_to_keep)
-			new_msgs_to_keep = [msg for msg in election_msgs if msg[TYPE] != ELECT and msg[TYPE] != APPEND_LOG]
+			new_msgs_to_keep = [msg for msg in election_msgs if msg[MID] not in msg_ids]
+			print(f'non_election_msgs: {new_msgs_to_keep}')
+			filtered_election_msgs = list(filter(lambda msg: msg[MID] in msg_ids, election_msgs))
+			print(f'filtered_election_msgs: {filtered_election_msgs}')
 			msgs_to_keep = msgs_to_keep + new_msgs_to_keep
-			for msg in election_msgs:
+			for msg in filtered_election_msgs:
 				msg_term = msg.get(TERM)
 				print(f'CANDIDATE {MY_ID} RECEIVED {msg}')
-				if msg[TYPE] != ELECT and msg[TYPE] != APPEND_LOG:
-					send_msg(sock, format_msg(msg[DST], msg[SRC], LEADER_ID, FAIL, msg[MID]))
+				# if msg[TYPE] != ELECT and msg[TYPE] != APPEND_LOG:
+				# 	send_msg(sock, format_msg(msg[DST], msg[SRC], LEADER_ID, FAIL, msg[MID]))
 				if msg[TYPE] == ELECT and msg[VOTE_GRANTED] == True:
 					votes.add(msg[SRC])
 					print(f'Adding {msg[SRC]} to candidate votes {votes}')
@@ -337,9 +344,7 @@ def begin_election(start, original_sock):
 				if (msg[TYPE] == APPEND_LOG) and (msg_term is not None and msg_term >= CURRENT_TERM):
 					print(f'Acknowledging leadership claim by: {msg[SRC]} {msg}')
 					LEADER_ID = msg[LEADER]
-					# update_term(msg_term)
-					CURRENT_TERM = msg_term
-					# VOTED_FOR = None
+					update_term(msg_term)
 					return msgs_to_keep
 				# (c) a period of time goes by with no winner
 				clock = time.time()
@@ -358,9 +363,10 @@ while True:
 	if sock in ready:
 		print("old messages: ", old_msgs)
 		msgs = recv_msgs(sock, old_msgs)
-		if len(old_msgs) > 0:
-			old_msgs = []
+		# if len(old_msgs) > 0:
+		old_msgs = []
 		contact = False
+
 		for msg in msgs:
 			if msg[TYPE] == GET and LEADER_ID != 'FFFF':
 				handle_get(sock, msg)
@@ -385,8 +391,8 @@ while True:
 			continue
 		if LEADER_ID == MY_ID:
 			# Prevent other elections
-			last_log_index = len(LOG) - 1
-			last_log_term = LOG[-1].get(TERM)
+			last_log_index = max(len(LOG) - 1, 0)
+			last_log_term = LOG[-1].get(TERM) if LOG else 0
 			heartbeat_ids = [''.join(random.choices(string.ascii_letters + string.digits, k=12)) for ii in range(len(REPLICA_IDS))]
 			heartbeat_msgs = [format_msg(MY_ID, replica_id, LEADER_ID, APPEND_LOG, m_id, entries=[], last_log_indx=last_log_index, last_log_term=last_log_term) for replica_id, m_id in zip(REPLICA_IDS, heartbeat_ids)]
 			for msg in heartbeat_msgs:
