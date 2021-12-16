@@ -35,7 +35,7 @@ LEADER_ID = 'FFFF'
 COMMIT_INDEX = 0
 # Index of last log applied to LOCAL_STATE
 LAST_APPLIED = 0
-DEBUG = True
+DEBUG = False
 
 
 def format_msg(src, dst, leader, msg_type, m_id, key=None, value=None, candidate_id=None, vote_granted=None, entries=None, last_log_indx=0, last_log_term=0):
@@ -53,10 +53,10 @@ def format_msg(src, dst, leader, msg_type, m_id, key=None, value=None, candidate
 			msg = {SRC: src, DST: dst, LEADER: leader, TYPE: msg_type, MID:m_id, KEY: key}
 		elif value:
 			msg = {SRC: src, DST: dst, LEADER: leader, TYPE: msg_type, MID:m_id, VALUE: value}
-	
+
 	elif msg_type == FAIL or msg_type == REDIRECT:
 			msg = {SRC: src, DST: dst, LEADER: leader, TYPE: msg_type, MID:m_id, LAST_LOG_INDX: last_log_indx, LAST_LOG_TERM: last_log_term}
-	
+
 	elif msg_type == OK:
 		if key and value:
 			msg = {SRC: src, DST: dst, LEADER: leader, TYPE: msg_type, MID:m_id, KEY: key, VALUE: value}
@@ -80,10 +80,10 @@ def format_msg(src, dst, leader, msg_type, m_id, key=None, value=None, candidate
 			entries = entries[last_log_indx:]
 		msg = {SRC: src, DST: dst, LEADER: leader, TYPE: msg_type, MID:m_id, TERM: CURRENT_TERM,
 				LAST_LOG_INDX: last_log_indx, LAST_LOG_TERM: last_log_term, LOG_ENTRIES: entries, LEADER_INDX: COMMIT_INDEX}
-	
+
 	return msg
 
-# Receive 
+# Receive
 def recv_msgs(sock, old_msgs):
 	global buffer, DEBUG
 
@@ -93,7 +93,7 @@ def recv_msgs(sock, old_msgs):
 	if len(fresh_buf) == 0:
 			return None
 
-	buffer += fresh_buf	
+	buffer += fresh_buf
 
 	msgs = []
 	while TERMINATOR in buffer:
@@ -190,7 +190,7 @@ def send_append_entries(replica_OKs, start_time, last_log):
 	# send append entries with data to all other replicas
 	# should  leader send append entries to all replicas to prevent election from starting during this?
 	replica_ids_not_responded = [r_id for r_id in REPLICA_IDS if r_id not in replica_OKs]
-	msg_ids = [''.join(random.choices(string.ascii_letters + string.digits, k=12)) 
+	msg_ids = [''.join(random.choices(string.ascii_letters + string.digits, k=12))
 					for ii in range(len(replica_ids_not_responded))]
 	heartbeat_ids = [''.join(random.choices(string.ascii_letters + string.digits, k=12))
 					for ii in range(len(replica_OKs) - 1)]
@@ -386,7 +386,7 @@ def handle_elect(sock, msg):
 		print(VOTED_FOR)
 	response = format_msg(msg[DST], msg[SRC], LEADER_ID, ELECT, msg[MID], candidate_id=msg[C_ID], vote_granted=vote_granted)
 	send_msg(sock, [response])
-	return vote_granted	
+	return vote_granted
 
 
 def update_term(term):
@@ -422,7 +422,7 @@ def begin_election(start, original_sock):
 	msg_ids = [''.join(random.choices(string.ascii_letters + string.digits, k=12)) for ii in range(len(REPLICA_IDS))]
 	vote_requests = [format_msg(MY_ID, replica_id, LEADER_ID, ELECT, m_id, candidate_id=MY_ID) for replica_id, m_id in zip(REPLICA_IDS, msg_ids)]
 	send_msg(original_sock, vote_requests)
-	# A candidate continues in this state until one of three things happens: 
+	# A candidate continues in this state until one of three things happens:
 	all_servers = len(REPLICA_IDS) + 1
 	msgs_to_keep = []
 	last_log_term = 0
@@ -501,7 +501,7 @@ old_msgs = []
 while True:
 	ready = select.select([sock], [], [], SELECT_WAIT_TIME)[0]
 	election_timeout = random.choice(TIMEOUT_RANGE) / 1000
-	
+
 	if sock in ready:
 		if DEBUG:
 			print("len with dups", len(old_msgs))
@@ -521,6 +521,7 @@ while True:
 		old_msgs = []
 		contact = False
 
+		print("hi", type(msgs))
 		for msg in msgs:
 			if msg[TYPE] == GET and LEADER_ID != 'FFFF':
 				handle_get(sock, msg)
@@ -542,7 +543,7 @@ while True:
 				if msg not in old_msgs:
 					old_msgs.append(msg)
 		if contact:
-			last = time.time() 
+			last = time.time()
 			continue
 		if LEADER_ID == MY_ID:
 			# Prevent other elections
