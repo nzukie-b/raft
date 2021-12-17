@@ -13,7 +13,7 @@ LAST_LOG_TERM = 'log_term'
 LAST_LOCAL_LOG = 'last_local_log'
 VOTE_GRANTED = 'vote_granted'
 LOG_ENTRIES = 'log_entries'
-LEADER_INDX = 'leader_indx'
+LEADER_INDEX = 'leader_index'
 
 # TYPES
 GET = 'get'

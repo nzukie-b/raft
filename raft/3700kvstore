@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
 import sys, socket, select, time, json, random, string, math
 from constants import *
@@ -66,7 +66,7 @@ def format_msg(src, dst, leader, msg_type, m_id, key=None, value=None, candidate
 		elif value:
 			msg = {SRC: src, DST: dst, LEADER: leader, TYPE: msg_type, MID:m_id, VALUE: value}
 		else:
-			msg = {SRC: src, DST: dst, LEADER: leader, TYPE: msg_type, MID:m_id}
+			msg = {SRC: src, DST: dst, LEADER: leader, TYPE: msg_type, MID:m_id, LAST_LOG_INDX:last_log_indx, LAST_LOG_TERM: last_log_term}
 	elif msg_type == ELECT:
 		# if vote_granted is None:
 		# 	msg = {SRC: src, DST: dst, LEADER: leader, TYPE: msg_type, MID:m_id, TERM: CURRENT_TERM, C_ID: candidate_id}
@@ -74,18 +74,19 @@ def format_msg(src, dst, leader, msg_type, m_id, key=None, value=None, candidate
 			msg = {SRC: src, DST: dst, LEADER: leader, TYPE: msg_type, MID:m_id, TERM: CURRENT_TERM, C_ID: candidate_id, VOTE_GRANTED: vote_granted,
 				   LAST_LOG_TERM: last_log_term, LAST_LOG_INDX:last_log_indx}
 	elif msg_type == APPEND_LOG:
-		if len(entries) > 0:
-			last_log_indx = REPLICA_LAST_INDEX[dst][1]
-			last_log_term = REPLICA_LAST_INDEX[dst][0]
+		if len(LOG) > 0:
+			last_log_indx = REPLICA_LAST_INDEX[dst][1] if last_log_indx == 0 else last_log_indx
+			last_log_term = REPLICA_LAST_INDEX[dst][0] if last_log_term == 0 else last_log_term
 			if DEBUG:
-				print("last log indx", last_log_indx)
-				print("last log term", last_log_term)
+				print(f"{MY_ID} last log indx for {dst} ", last_log_indx)
+				print(f"{MY_ID} last log term for {dst} ", last_log_term)
 
-			entries = entries[last_log_indx:]
+		entries_slice = entries[last_log_indx:] if len(entries) > 0 else []
 		msg = {SRC: src, DST: dst, LEADER: leader, TYPE: msg_type, MID:m_id, TERM: CURRENT_TERM,
-				LAST_LOG_INDX: last_log_indx, LAST_LOG_TERM: last_log_term, LOG_ENTRIES: entries, LEADER_INDX: COMMIT_INDEX}
+				LAST_LOG_INDX: last_log_indx, LAST_LOG_TERM: last_log_term, LOG_ENTRIES: entries_slice, LEADER_INDEX: COMMIT_INDEX}
 
 	return msg
+
 
 # Receive
 def recv_msgs(sock, old_msgs):
@@ -103,13 +104,13 @@ def recv_msgs(sock, old_msgs):
 
 	buffer += fresh_buf
 
-	print("buffer", buffer)
+	# print("buffer", buffer )
 
 	msgs = []
-	print("TERMINATOR", TERMINATOR)
+	# print("TERMINATOR", TERMINATOR)
 	while TERMINATOR in buffer:
 		position = buffer.find(TERMINATOR) + len(TERMINATOR)
-		print("retreiving from buffer", json.loads(buffer[:position - 1].decode()))
+		# print("retreiving from buffer", json.loads(buffer[:position - 1].decode()))
 		msgs.append(json.loads(buffer[:position - 1].decode()))  # -1 to remove the \n, which json.loads won't want
 		buffer = buffer[position:]
 	#put_msgs = [msg for msg in msgs if msg[TYPE] == PUT]
@@ -121,21 +122,30 @@ def recv_msgs(sock, old_msgs):
 
 def send_msg(sock, msgs):
 	global DEBUG
-	if DEBUG:
-		print(f'SENDING: {msgs}')
+	# if DEBUG:
+		# print(f'SENDING: {msgs}')
 
 	for msg in msgs:
 		if DEBUG:
 			print("message: ", msg)
 		sock.send(json.dumps(msg).encode() + b'\n')
 
+def send_heartbeat(sock, replica_ids):
+	heartbeat_ids = [''.join(random.choices(string.ascii_letters + string.digits, k=12)) for ii in range(len(replica_ids))]
+	# Don't send self a heartbeat
+	heartbeat_msgs = [format_msg(MY_ID, replica_id, LEADER_ID, APPEND_LOG, m_id, entries=[]) for replica_id, m_id in zip(replica_ids, heartbeat_ids) if replica_id != MY_ID]
+	t1 = time.time()
+	send_msg(sock, heartbeat_msgs)
+	t2 = time.time()
+	print("time to send heartbeats", t2 - t1)
 
 def handle_get(sock, msg):
 	global LEADER_ID, LOCAL_STATE, DEBUG
 	if DEBUG:
 		print(f"{msg[DST]} received a {msg[TYPE]} from {msg[SRC]}: {msg}")
-		print("current leader during get: ", msg[LEADER])
-	if msg[LEADER] != MY_ID:
+		print("current leader during a get: ", LEADER_ID)
+		print("message leader: ", msg[LEADER])
+	if msg[LEADER] != MY_ID and LEADER_ID != 'FFFF':
 		response = format_msg(msg[DST], msg[SRC], LEADER_ID, REDIRECT, msg[MID])
 	elif msg[LEADER] == MY_ID:
 		if DEBUG:
@@ -147,8 +157,6 @@ def handle_get(sock, msg):
 			if DEBUG:
 				print(f'VALUE NOT FOUND FOR KEY {msg[KEY]}')
 			response = format_msg(msg[DST], msg[SRC], LEADER_ID, FAIL, msg[MID])
-	elif msg[LEADER] == "FFFF":
-		response = format_msg(msg[DST], msg[SRC], LEADER_ID, FAIL, msg[MID])
 	else:
 		raise Exception("We should never see this")
 	send_msg(sock, [response])
@@ -158,8 +166,9 @@ def handle_put(sock, msg):
 	other_msgs = []
 	if DEBUG:
 		print(f"{msg[DST]} received a {msg[TYPE]} from {msg[SRC]}: {msg}")
-		print("current leader during put: ", msg[LEADER])
-	if msg[LEADER] != MY_ID:
+		print("current leader during a put: ", LEADER_ID)
+		print("message leader: ", msg[LEADER])
+	if msg[LEADER] != MY_ID and LEADER_ID != 'FFFF':
 		response = format_msg(msg[DST], msg[SRC], LEADER_ID, REDIRECT, msg[MID])
 	elif msg[LEADER] == MY_ID:
 		# The leader appends the command to its log as a new entry,
@@ -171,6 +180,9 @@ def handle_put(sock, msg):
 		# the leader includes the index and term of the entry in its log that immediately precedes the new entries
 		replica_OKs = {MY_ID}
 		# then issues AppendEntries RPCs in parallel to each of the other servers to replicate the entry
+
+		put_timeout = random.choice(TIMEOUT_RANGE) / 1000
+		quorum_start = time.time()
 		while True:
 			start_time = time.time()
 			# replica_OKs should update in send_append_entries so we can keep using it as an arg
@@ -184,18 +196,20 @@ def handle_put(sock, msg):
 		# When the entry has been safely replicated, the leader applies the entry to its state machine
 		if DEBUG:
 			print(f'{MY_ID} STORING KEY: {key} VALUE: {val} REPLICATED BY {received_OKs}')
+			print(f'Updating commit index to {max(len(LOG) - 1, 0)}')
 		LOCAL_STATE[key] = val
 		COMMIT_INDEX = max(len(LOG) - 1, 0)
+		# Send heartbeat with updated commit index to other replicas
+		send_heartbeat(sock, REPLICA_IDS)
 		response = format_msg(msg[DST], msg[SRC], LEADER_ID, OK, msg[MID])
-		#LAST_LOG_TERM = LOG[-1] if len(LOG) > 0 else None
 
 	elif msg[LEADER] == "FFFF":
 		response = format_msg(msg[DST], msg[SRC], LEADER_ID, FAIL, msg[MID])
 	else:
 		raise Exception("We should never see this")
 	send_msg(sock, [response])
-	# TODO: Do something with this
 	return other_msgs
+
 
 def send_append_entries(replica_OKs, start_time, last_log):
 	global LOG, REPLICA_LAST_INDEX, DEBUG
@@ -204,28 +218,22 @@ def send_append_entries(replica_OKs, start_time, last_log):
 	replica_ids_not_responded = [r_id for r_id in REPLICA_IDS if r_id not in replica_OKs]
 	msg_ids = [''.join(random.choices(string.ascii_letters + string.digits, k=12))
 					for ii in range(len(replica_ids_not_responded))]
-	heartbeat_ids = [''.join(random.choices(string.ascii_letters + string.digits, k=12))
-					for ii in range(len(replica_OKs) - 1)]
-	last_log_term, last_log_indx = 0, 0
+	# heartbeat_ids = [''.join(random.choices(string.ascii_letters + string.digits, k=12))
+	# 				for ii in range(len(replica_OKs) - 1)]
+	# last_log_term, last_log_indx = 0, 0
 	append_entry_msgs = [format_msg(MY_ID, replica_id, LEADER_ID, APPEND_LOG, m_id, entries=LOG)
 							for replica_id, m_id in zip(replica_ids_not_responded, msg_ids)]
 	# TODO: DON'T INCLUDE OURSELF!
-	heartbeat_msgs = [format_msg(MY_ID, replica_id, LEADER_ID, APPEND_LOG, m_id, entries=[])
-						for replica_id, m_id in zip(replica_OKs, heartbeat_ids) if replica_id != MY_ID]
+	# heartbeat_msgs = [format_msg(MY_ID, replica_id, LEADER_ID, APPEND_LOG, m_id, entries=[])
+	# 					for replica_id, m_id in zip(replica_OKs, heartbeat_ids) if replica_id != MY_ID]
 	if DEBUG:
-		print(len(heartbeat_msgs), len(REPLICA_IDS))
 		print("append entry message")
 	t1 = time.time()
 	send_msg(sock, append_entry_msgs)
 	t2 = time.time()
 	print("time to send append entry messages", t2 - t1)
 
-	if DEBUG:
-		print("heartbeat message")
-	t1 = time.time()
-	send_msg(sock, heartbeat_msgs)
-	t2 = time.time()
-	print("time to send append heartbeat messages", t2 - t1)
+	send_heartbeat(sock, replica_OKs)
 
 	other_msgs = []
 	# TODO: maybe change timeout length
@@ -243,35 +251,36 @@ def send_append_entries(replica_OKs, start_time, last_log):
 				if msg[TYPE] == OK and msg[MID] in msg_ids:
 					replica_OKs.add(msg[SRC])
 					if DEBUG:
-						print("before: ok message, updating replica indexes", REPLICA_LAST_INDEX)
-					REPLICA_LAST_INDEX[msg[SRC]] = (CURRENT_TERM, max(0, len(LOG) - 1))
+						print(f"before: ok message from {msg[SRC]} MID: {msg[MID]}, updating replica indexes", REPLICA_LAST_INDEX)
+					REPLICA_LAST_INDEX[msg[SRC]] = (msg[LAST_LOG_TERM], msg[LAST_LOG_INDX])
 					if DEBUG:
-						print("after: ok message, updating replica indexes", REPLICA_LAST_INDEX)
+						print(f"after: ok message from {msg[SRC]} MID: {msg[MID]}, updating replica indexes", REPLICA_LAST_INDEX)
 				elif msg[TYPE] == FAIL and msg[MID] in msg_ids:
 					if DEBUG:
-						print("before: fail message, updating replica indexes", REPLICA_LAST_INDEX)
-					#replica_current_term = msg[LAST_LOCAL_LOG].get(TERM) if msg[LAST_LOCAL_LOG] is not None else msg[LAST_LOG_TERM]
-					#replica_last_local_index = LOG.index(msg[LAST_LOCAL_LOG]) if msg[LAST_LOCAL_LOG] is not None else msg[LAST_LOG_INDX]
+						print(f"before: fail message from {msg[SRC]} MID: {msg[MID]}, updating replica indexes", REPLICA_LAST_INDEX)
+					# replica_current_term = msg[LAST_LOCAL_LOG].get(TERM) if msg[LAST_LOCAL_LOG] is not None else msg[LAST_LOG_TERM]
+					# replica_last_local_index = LOG.index(msg[LAST_LOCAL_LOG]) if msg[LAST_LOCAL_LOG] is not None else msg[LAST_LOG_INDX]
+					replica_log_term = msg[LAST_LOG_TERM]
+					replica_last_log_index = msg[LAST_LOG_INDX]
+					# replica_term = msg[LAST_LOG_TERM]
+					# replica_index = msg[LAST_LOG_INDX]
+					# replica_last_local_index = 0
+					# try:
+					# 	if LOG[replica_index].get(TERM) == replica_term:
+					# 		replica_term = replica_term
+					# 		replica_last_local_index = replica_index
+					# except IndexError:
+					# 	pass
 
-					replica_term = msg[LAST_LOG_TERM]
-					replica_index = msg[LAST_LOG_INDX]
-					replica_last_local_index = 0
-					try:
-						if LOG[replica_index].get(TERM) == replica_term:
-							replica_term = replica_term
-							replica_last_local_index = replica_index
-					except IndexError:
-						pass
+					# for entry in LOG:
+					# 	if entry.get(TERM) == replica_term:
+					# 		replica_last_local_index = LOG.index(entry)
+					# 		break
 
-					for entry in LOG:
-						if entry.get(TERM) == replica_term:
-							replica_last_local_index = LOG.index(entry)
-							break
-
-					REPLICA_LAST_INDEX[msg[SRC]] = (replica_term, replica_last_local_index)
+					REPLICA_LAST_INDEX[msg[SRC]] = (replica_log_term, replica_last_log_index)
 
 					if DEBUG:
-						print("after: fail message, updating replica indexes", REPLICA_LAST_INDEX)
+						print(f"after: fail message from {msg[SRC]} MID: {msg[MID]}, updating replica indexes", REPLICA_LAST_INDEX)
 					pass
 				else:
 					if msg not in other_msgs:
@@ -286,24 +295,24 @@ def handle_log(sock, msg):
 	global CURRENT_TERM, LOG, LOCAL_STATE, COMMIT_INDEX, VOTED_FOR, LEADER_ID, LAST_APPLIED, DEBUG
 	success = True
 	msg_term = msg[TERM]
-	print("term before update: ", CURRENT_TERM)
-	print("term to maybe update to: ", msg_term)
+	local_term = CURRENT_TERM
+	if msg_term > CURRENT_TERM:
+		LEADER_ID = msg[LEADER]
 	update_term(msg_term)
-	print("term after update: ", CURRENT_TERM)
+	update_commit_index(msg)
 	last_index = msg[LAST_LOG_INDX]
 	log_entries = msg[LOG_ENTRIES]
 	if DEBUG:
-		print("current leader during handle log", msg[LEADER])
+		print(f"{MY_ID}: current leader during handle log ", LEADER_ID)
+		print("message leader: ", msg[LEADER])
 		print("message id", msg[MID])
 
 	# if received a heart beat
-	if len(msg[LOG_ENTRIES]) == 0 and msg[LEADER] != 'FFFF':
-		LEADER_ID = msg[LEADER]
-		# print(f'{MY_ID} received heartbeat')
+	if len(msg[LOG_ENTRIES]) == 0:
 		return
 	elif msg[SRC] != MY_ID:
-		# reply false if term is less than current term
-		if msg_term < CURRENT_TERM:
+		# reply false if msg term is less than local term
+		if msg_term < local_term:
 			if DEBUG:
 				print("msg_term < CURRENT_TERM")
 			success = False
@@ -311,6 +320,7 @@ def handle_log(sock, msg):
 		elif len(LOG) == 0:
 			success = True
 		else:
+			# TODO: this section might be causing issues with leader election for advanced
 			try:
 				if LOG[msg[LAST_LOG_INDX]].get(TERM) == msg[LAST_LOG_TERM]:
 					success = True
@@ -320,167 +330,171 @@ def handle_log(sock, msg):
 						print("LOG[msg[LAST_LOG_INDX]] is not equal to msg[LAST_LOG_TERM]")
 			except IndexError:
 				if DEBUG:
-					print("index out of bounds error caught")
+					print(f"{MY_ID} index out of bounds error index: {msg[LAST_LOG_INDX]} size:{len(LOG)}")
 				success = False
 
-	#last_local_log = LOG[-1] if len(LOG) > 0 else None
 	last_local_log = None
 	# find last index in log where we match for the given term
-	for entry in LOG:
-		if entry.get(TERM) < msg[TERM]:
-			last_local_log = entry
-		else:
-			break
-
+	# for entry in LOG:
+	# 	if entry.get(TERM) < msg[LAST_LOG_TERM]:
+	# 		last_local_log = entry
+	# 	elif entry.get(TERM) == msg[LAST_LOG_TERM]:
+	# 		if msg[LAST_LOG_INDX] >= LOG.index(entry):
+	# 			last_local_log = entry
+	# 		else:
+	# 			# The last index is before the last entry in this log
+	# 			break
+	# 	else:
+	# 		break
+	if len(LOG) > 0:
+		last_local_log = LOG[-1]
 
 	if success:
 		# make sure all of log matches
 		LOG = LOG[0:last_index] + log_entries
 		# update local state
-		for i in range(last_index, len(LOG)):
-			log_entry = LOG[i]
-			if DEBUG:
-				print(f'{MY_ID} APPLYING {log_entry} to LOCAL_STATE')
-			LOCAL_STATE[log_entry.get(KEY)] = log_entry.get(VALUE)
-			LAST_APPLIED = i
+		update_commit_index(msg)
+		print(f'{MY_ID} LAST APPLIED {LAST_APPLIED}, COMMIT INDEX:: {COMMIT_INDEX}')
+		# if LAST_APPLIED <= COMMIT_INDEX:
+		# 	last_log = LAST_APPLIED
+		# 	term = LOG[LAST_APPLIED].get(TERM)
+			# # Missing entry in log
+			# last_log = LAST_APPLIED
+			# term = LOG[LAST_APPLIED].get(TERM)
+			# fail_msg = format_msg(MY_ID, msg[SRC], LEADER_ID, FAIL, msg[MID], last_log_indx=last_log, last_log_term=term, last_local_log=last_local_log)
+			# send_msg(sock, [fail_msg])
+			# return success
 		# send ok message
-		LEADER_ID = msg[LEADER]
-		COMMIT_INDEX = msg[LEADER_INDX]
-		ok_msg = format_msg(MY_ID, msg[SRC], LEADER_ID, OK, msg[MID])
+		log_index = LAST_APPLIED
+		log_term = LOG[-1].get(TERM)
+		ok_msg = format_msg(MY_ID, msg[SRC], LEADER_ID, OK, msg[MID], last_log_indx=log_index, last_log_term=log_term)
 		send_msg(sock, [ok_msg])
 	else:
 		last_log = LOG.index(last_local_log) if last_local_log is not None else 0
 		term = last_local_log.get(TERM) if last_local_log else 0
 		fail_msg = format_msg(MY_ID, msg[SRC], LEADER_ID, FAIL, msg[MID], last_log_indx=last_log, last_log_term=term, last_local_log=last_local_log)
 		send_msg(sock, [fail_msg])
-
-
-
-
-
-
-		#
-		# if msg_term > CURRENT_TERM:
-		# 	VOTED_FOR = None
-		# 	CURRENT_TERM = msg_term
-		#elif last_local_log is not None and (last_local_log.get(TERM) != msg[LAST_LOG_TERM]):
-			#success = False
-
-
-		# if len(LOG) == last_index or len(LOG) == 0:
-		# 	if len(LOG) > 0 and LOG[last_index].get(TERM) == msg[LAST_LOG_TERM]:
-		# 		LOG = LOG[0:last_index] + log_entries
-		# 	elif len(LOG) == 0:
-		# 		LOG = log_entries
-		# 	for i in range(last_index, len(LOG)):
-		# 		log_entry = LOG[i]
-		# 		print(f'{MY_ID} APPLYING {log_entry} to LOCAL_STATE')
-		# 		LOCAL_STATE[log_entry.get(KEY)] = log_entry.get(VALUE)
-		# 		LAST_APPLIED = i
-		# 	LEADER_ID = msg[LEADER]
-		# 	ok_msg = format_msg(MY_ID, msg[SRC], LEADER_ID, OK, msg[MID])
-		# 	send_msg(sock, [ok_msg])
-		# else:
-		#
-		# 	last_log = LOG.index(last_local_log) if last_local_log is not None else 0
-		# 	term = last_local_log.get(TERM) if last_local_log else 0
-		# 	fail_msg = format_msg(MY_ID, msg[SRC], LEADER_ID, FAIL, msg[MID], last_log_indx=last_log, last_log_term=term)
-		# 	send_msg(sock, [fail_msg])
-
-		# # ensure logs are equal, make them equal if not
-		# log_entries = msg[LOG_ENTRIES]
-		# last_matching_index = max(len(LOG) - 1, 0)
-		# if len(LOG) > len(log_entries):
-		# 	print("LOGS ARE NOT EQUAL")
-		# 	print("LOG", LOG)
-		# 	print("log entries", log_entries)
-		#
-		# if len(LOG) > 0 and len(log_entries) > 0:
-		# 	for i in range(min(len(LOG), len(log_entries))):
-		# 		if LOG[i] and log_entries[i] and LOG[i].get(TERM) != log_entries[i].get(TERM):
-		# 			last_matching_index = i
-		# 			break
-		# print(f'{MY_ID} last_matching_index: {last_matching_index}')
-		# LOG = LOG[0:last_matching_index] + log_entries[last_matching_index::]
-		# update local state
-		# if last_matching_index is not None:
-
-
-		#  If leaderCommit > commitIndex, set commitIndex = min(leaderCommit, index of last new entry)
-		#COMMIT_INDEX = msg[LEADER_INDX]
-
-		# # send okay/fail message back
-		# if success:
-		# 	# return okay with updated leader
-		# 	LEADER_ID = msg[LEADER]
-		# 	ok_msg = format_msg(MY_ID, msg[SRC], LEADER_ID, OK, msg[MID])
-		# 	send_msg(sock, [ok_msg])
-		# else:
-		# 	# return fail
-		# 	fail_msg = format_msg(MY_ID, msg[SRC], LEADER_ID, FAIL, msg[MID])
-		# 	send_msg(sock, [fail_msg])
+	return success
 
 
 def handle_elect(sock, msg):
-	global VOTED_FOR, LEADER_ID, CURRENT_TERM, DEBUG, LOG
-
-	index = len(LOG) - 1 if len(LOG) > 0 else 0
-	term = LOG[index].get(TERM) if len(LOG) > 0 else 0
-
+	global VOTED_FOR, LEADER_ID, CURRENT_TERM, DEBUG, LOG, COMMIT_INDEX
 	update_term(msg[TERM])
-
+	last_index = COMMIT_INDEX
+	try:
+		last_term = LOG[last_index].get(TERM) if len(LOG) > 0 else 0
+	except IndexError:
+		last_term = LOG[-1].get(TERM) if len(LOG) > 0 else 0
+	vote_granted = False
 	if DEBUG:
 		print(f"{msg[DST]} received a {msg[TYPE]} from {msg[SRC]}: {msg}")
-	#  New election called
-	if VOTED_FOR is None:
-		if msg[LAST_LOG_TERM] > term:
-			vote_granted = True
-		elif msg[LAST_LOG_TERM] == term:
-			if msg[LAST_LOG_INDX] >= index:
+	# If voted for is null or candidate_id and log is up to date grant vote. 
+	if msg[TERM] >= CURRENT_TERM:
+		#  New election called
+		if VOTED_FOR is None:
+			if msg[LAST_LOG_TERM] > last_term:
 				vote_granted = True
+			elif msg[LAST_LOG_TERM] == last_term:
+				if msg[LAST_LOG_INDX] >= last_index:
+					vote_granted = True
+				else:
+					print(f"{MY_ID} terms were equal, index too big last_index: {last_index}, msg_index: {msg[LAST_LOG_INDX]}")
+					vote_granted = False
 			else:
-				print("terms were equal, index too big")
 				vote_granted = False
+				print("leader term was too small")
+			if vote_granted:
+				VOTED_FOR = msg[C_ID]
 		else:
-			vote_granted = False
-			print("leader term was too small")
-
-		if vote_granted:
-			VOTED_FOR = msg[C_ID]
+			print("already voted for this leader")
+			vote_granted = VOTED_FOR == msg[C_ID]
 	else:
-		print("already voted for this leader")
-		vote_granted = VOTED_FOR == msg[C_ID]
+		# reply false if msg[TERM] < CURRENT_TERM
+		if msg[TERM] < CURRENT_TERM:
+			vote_granted = False
 
 	print("giving vote: ", vote_granted)
 	if vote_granted:
 		LEADER_ID = msg[C_ID]
 
 	response = format_msg(msg[DST], msg[SRC], LEADER_ID, ELECT, msg[MID], candidate_id=msg[C_ID], vote_granted=vote_granted,
-						  last_log_term=term, last_log_indx=index)
+						  last_log_term=last_term, last_log_indx=last_index)
 	send_msg(sock, [response])
 	return vote_granted
 
 
 def update_term(term):
-	global CURRENT_TERM, VOTED_FOR, DEBUG
+	global CURRENT_TERM, VOTED_FOR, DEBUG, LEADER_ID
 	"""Update CURRENT_TERM to the provided term, and clears VOTED_FOR"""
 	if term < CURRENT_TERM:
 		if DEBUG:
-			print(f'Term should not decrease, current term: {CURRENT_TERM}')
+			print(f'Term does not decrease, current term: {CURRENT_TERM}')
 	elif term > CURRENT_TERM:
 		if DEBUG:
 			print(f'UPDATING TERM FROM {CURRENT_TERM} to {term}')
 		VOTED_FOR = None
 		if DEBUG:
 			print(f'CLEARING VOTED_FOR')
+		LEADER_ID = 'FFFF'
 		CURRENT_TERM = term
 	else:
+		print(f'CURRENT_TERM: {CURRENT_TERM}')
 		CURRENT_TERM = term
 
+def update_commit_index(msg):
+	global COMMIT_INDEX, LAST_APPLIED
+	new_commit_index = msg[LEADER_INDEX]
+	if new_commit_index < COMMIT_INDEX:
+		if DEBUG:
+			print(f'Commit index does not decrease, current commit index: {COMMIT_INDEX}')
+	elif new_commit_index > COMMIT_INDEX:
+		if DEBUG:
+			if DEBUG: print(f'Updating commit index from {COMMIT_INDEX} to {new_commit_index}') 
+		if new_commit_index > COMMIT_INDEX:
+			LEADER_ID = msg[LEADER]
+			old_commit_index = COMMIT_INDEX
+			COMMIT_INDEX = new_commit_index
+			# Apply changes to local state, update last applied
+			apply_commits(old_commit_index)
+	return LAST_APPLIED
+
+def apply_commits(start_index):
+	global COMMIT_INDEX, LAST_APPLIED
+	for i in range(start_index + 1, COMMIT_INDEX + 1):
+		try:
+			log_entry = LOG[i]
+			if DEBUG:
+				print(f'{MY_ID} APPLYING {log_entry} to LOCAL_STATE')
+			LOCAL_STATE[log_entry.get(KEY)] = log_entry.get(VALUE)
+			LAST_APPLIED = i
+		except IndexError:
+			print(f'{MY_ID} missing entry to apply commit at index {i}')
+
+
+def handle_msgs(sock, msgs):
+	unhandled_msgs = []
+	contact = False
+	for msg in msgs:
+		if msg[TYPE] == GET and LEADER_ID != 'FFFF':
+			handle_get(sock, msg)
+		elif msg[TYPE] == PUT and LEADER_ID != 'FFFF':
+			other_msgs = handle_put(sock, msg)
+			unhandled_msgs = unhandled_msgs + other_msgs
+		elif msg[TYPE] == ELECT:
+			if MY_ID == msg[C_ID]: continue
+			contact = handle_elect(sock, msg)
+		elif msg[TYPE] == APPEND_LOG:
+			handle_log(sock, msg)
+			contact = True
+		else:
+			# Store other msgs for later if no leader
+			if msg not in unhandled_msgs:
+				unhandled_msgs.append(msg)
+	return unhandled_msgs, contact
 
 
 def begin_election(start, original_sock):
-	global LEADER_ID, VOTED_FOR, CURRENT_TERM, LOG, REPLICA_LAST_INDEX, DEBUG
+	global LEADER_ID, VOTED_FOR, CURRENT_TERM, LOG, REPLICA_LAST_INDEX, DEBUG, COMMIT_INDEX
 	# Begin Election
 	LEADER_ID = 'FFFF'
 	if DEBUG:
@@ -522,23 +536,18 @@ def begin_election(start, original_sock):
 			new_msgs_to_keep = [msg for msg in election_msgs if msg[MID] not in msg_ids and msg[TYPE] != ELECT and msg[TYPE] != APPEND_LOG]
 			if DEBUG:
 				print(f'non_election_msgs: {new_msgs_to_keep}')
-			#filtered_election_msgs = list(filter(lambda msg: msg[MID] in msg_ids, election_msgs))
 			filtered_election_msgs = [msg for msg in election_msgs if msg not in new_msgs_to_keep]
-			if DEBUG:
-				print(f'filtered_election_msgs: {filtered_election_msgs}')
+			# if DEBUG:
+				# print(f'filtered_election_msgs: {filtered_election_msgs}')
 			msgs_to_keep = msgs_to_keep + new_msgs_to_keep
 			for msg in filtered_election_msgs:
 				msg_term = msg.get(TERM)
 				if DEBUG:
 					print(f'CANDIDATE {MY_ID} RECEIVED {msg}')
-				# if msg[TYPE] != ELECT and msg[TYPE] != APPEND_LOG:
-				# 	send_msg(sock, format_msg(msg[DST], msg[SRC], LEADER_ID, FAIL, msg[MID]))
 				if msg[TYPE] == ELECT and msg[VOTE_GRANTED] == True:
-
 					# If the logs have last entries with different terms, then the log with the later term is more up-to-date
 					if CURRENT_TERM < msg[LAST_LOG_TERM]:
 						leader_up_to_date = False
-
 					# If the logs end with the same term, then whichever log is longer is more up-to-date
 					if CURRENT_TERM == msg[LAST_LOG_TERM]:
 						if msg[LAST_LOG_INDX] > len(LOG) - 1:
@@ -550,11 +559,10 @@ def begin_election(start, original_sock):
 				elif msg[TYPE] == ELECT and msg[VOTE_GRANTED] == False:
 					fail_votes.add(msg[SRC])
 
-
 				# see if majority of votes are fails
 				if len(fail_votes) > (all_servers // 2):
 					if DEBUG:
-						print(f'CANDIDATE {MY_ID} was out of date, can not become leader')
+						print(f'CANDIDATE {MY_ID} failed election. votes: {fail_votes}')
 					return msgs_to_keep
 
 				# (a) It wins the election
@@ -562,61 +570,45 @@ def begin_election(start, original_sock):
 					if leader_up_to_date:
 						old_msgs = []
 						if DEBUG:
-							print(f'ELECTION WON BY CANDIDATE {MY_ID} with votes {votes}')
+							print(f'ELECTION WON BY CANDIDATE {MY_ID} with votes {votes}') 
+							print(f'{MY_ID} updating commit index to {max(0, len(LOG) - 1)}') 
 						LEADER_ID = MY_ID
-						if DEBUG:
-							print(f'LEADER_ID: {LEADER_ID} {MY_ID}')
+						COMMIT_INDEX = max(0, len(LOG) - 1)
 
 						if len(LOG) > 0:
-							last_log_term = LOG[-1].get(TERM)
+							last_log_term = LOG[COMMIT_INDEX].get(TERM)
 
-						# initialize all nextIndex values in replica next index dictionary to the index just after the last in leader's log
+						# initialize all last values in replica last index dictionary to the index of the last in leader's log
 						for r in REPLICA_IDS:
 							REPLICA_LAST_INDEX[r] = (last_log_term, max(0, len(LOG) - 1))
-
-						# go through non-election messages that were received during election
-						for msg in msgs_to_keep:
-							if msg[TYPE] == GET and LEADER_ID != 'FFFF':
-								handle_get(sock, msg)
-							elif msg[TYPE] == PUT and LEADER_ID != 'FFFF':
-								other_msgs = handle_put(sock, msg)
-								old_msgs = old_msgs + other_msgs
-							elif msg[TYPE] == ELECT:
-								if MY_ID == msg[C_ID]: continue
-							elif msg[TYPE] == APPEND_LOG:
-								handle_log(sock, msg)
-							# Handle noop messages. This may be removed from your final implementation
-							elif msg['type'] == 'noop':
-								if DEBUG:
-									print(f"{msg['dst']} received a NOOP from {msg['src']}")
-							else:
-								# Store old msgs for later if no leader
-								if msg not in old_msgs:
-									old_msgs.append(msg)
-
-						success_ids = [''.join(random.choices(string.ascii_letters + string.digits, k=12)) for ii in range(len(REPLICA_IDS))]
-						success_msgs = [format_msg(MY_ID, replica_id, LEADER_ID, APPEND_LOG, m_id, entries=LOG) for replica_id, m_id in zip(REPLICA_IDS, success_ids)]
-						t1 = time.time()
-						send_msg(sock, success_msgs)
-						t2 = time.time()
+						print(f'{MY_ID} Handling messages received during election')
+						msgs_to_keep = [msg for msg in msgs_to_keep if msg[TYPE] != ELECT]
+						
+						old_msgs, contact = handle_msgs(sock, msgs_to_keep)
+						print(f"election won sending heartbeat to {REPLICA_IDS}")
+						send_heartbeat(sock, REPLICA_IDS)
 						print("time to send success messages from election", t2 - t1)
 					else:
 						if DEBUG:
 							print(f'CANDIDATE {MY_ID} was out of date, can not become leader')
-
 					return old_msgs
+				
 				#  (b) Another server establishes itself as leader
 				# If Leader's term is at least as large as the candidate's current term, the leader is recognized else ignore claim
 				if (msg[TYPE] == APPEND_LOG) and (msg_term is not None and msg_term >= CURRENT_TERM):
+					update_term(msg_term)
 					if DEBUG:
 						print(f'Acknowledging leadership claim by: {msg[SRC]} {msg}')
-
 					LEADER_ID = msg[LEADER]
-					print("term before update: ", CURRENT_TERM)
-					print("term to maybe update to: ", msg_term)
-					update_term(msg_term)
-					print("term after update: ", CURRENT_TERM)
+					VOTED_FOR = msg[LEADER]
+					# print("term before update: ", CURRENT_TERM)
+					# print("term to maybe update to: ", msg_term)
+					# update_term(msg_term)
+					# print("term after update: ", CURRENT_TERM)
 					return msgs_to_keep
+				elif (msg[TYPE] == ELECT) and (msg_term is not None and msg_term > CURRENT_TERM):
+					update_term(term)
+					# handle_log(sock, msg)
 				# (c) a period of time goes by with no winner
 				clock = time.time()
 				total_time = round(Decimal(clock) - Decimal(start), 3)
@@ -626,7 +618,6 @@ def begin_election(start, original_sock):
 					return msgs_to_keep
 			continue
 
-# last = time.time()
 old_msgs = []
 while True:
 	ready = select.select([sock], [], [], SELECT_WAIT_TIME)[0]
@@ -635,9 +626,9 @@ while True:
 	if sock in ready:
 		if DEBUG:
 			print("len with dups", len(old_msgs))
-		if len(old_msgs) > 0:
-			if DEBUG:
-				print("messages", old_msgs)
+		# if len(old_msgs) > 0:
+			# if DEBUG:
+				# print("messages", old_msgs)
 		no_dups_old_msgs = []
 		for i in old_msgs:
 			if i not in no_dups_old_msgs:
@@ -650,44 +641,16 @@ while True:
 		t2 = time.time()
 		print("time to receive messages in sock", t2 - t1)
 
-		# if len(old_msgs) > 0:
-		old_msgs = []
 		contact = False
 
 		print("hi", type(msgs))
-		for msg in msgs:
-			if msg[TYPE] == GET and LEADER_ID != 'FFFF':
-				handle_get(sock, msg)
-			elif msg[TYPE] == PUT and LEADER_ID != 'FFFF':
-				other_msgs = handle_put(sock, msg)
-				old_msgs = old_msgs + other_msgs
-			elif msg[TYPE] == ELECT:
-				if MY_ID == msg[C_ID]: continue
-				contact = handle_elect(sock, msg)
-			elif msg[TYPE] == APPEND_LOG:
-				handle_log(sock, msg)
-				contact = True
-			# Handle noop messages. This may be removed from your final implementation
-			elif msg['type'] == 'noop':
-				if DEBUG:
-					print(f"{msg['dst']} received a NOOP from {msg['src']}")
-			else:
-				# Store old msgs for later if no leader
-				if msg not in old_msgs:
-					old_msgs.append(msg)
+		old_msgs, contact = handle_msgs(sock, msgs)
 		if contact:
 			last = time.time()
 			continue
 		if LEADER_ID == MY_ID:
 			# Prevent other elections
-			last_log_index = max(len(LOG) - 1, 0)
-			last_log_term = LOG[-1].get(TERM) if LOG else 0
-			heartbeat_ids = [''.join(random.choices(string.ascii_letters + string.digits, k=12)) for ii in range(len(REPLICA_IDS))]
-			heartbeat_msgs = [format_msg(MY_ID, replica_id, LEADER_ID, APPEND_LOG, m_id, entries=[]) for replica_id, m_id in zip(REPLICA_IDS, heartbeat_ids)]
-			t1 = time.time()
-			send_msg(sock, heartbeat_msgs)
-			t2 = time.time()
-			print("time to send heartbeats", t2 - t1)
+			send_heartbeat(sock, REPLICA_IDS)
 
 		clock = time.time()
 		total_time = round(Decimal(clock) - Decimal(last), 3)
@@ -698,5 +661,3 @@ while True:
 			old_msgs = old_msgs + non_election_msgs
 			VOTED_FOR = None
 		last = clock
-
-print(LOG)
